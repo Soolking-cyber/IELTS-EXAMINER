@@ -99,6 +99,7 @@ export class GdmLiveAudio extends LitElement {
   @state() private user: User | null = null;
   @state() private authInitialized = false;
   @state() private firebaseAvailable = isFirebaseConfigured;
+  @state() private isGuestMode = false;
 
   // Firebase services
   private app;
@@ -126,7 +127,7 @@ export class GdmLiveAudio extends LitElement {
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
   private readonly logoUrl =
-    'data:image/png;base64,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';
+    'data:image/png;base64,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';
 
   static styles = css`
     :host {
@@ -505,6 +506,11 @@ export class GdmLiveAudio extends LitElement {
       color: #bbb;
       max-width: 300px;
     }
+    #google-signin,
+    #guest-signin {
+      width: 100%;
+      box-sizing: border-box;
+    }
     #google-signin {
       background-color: #4285f4;
       color: white;
@@ -522,6 +528,21 @@ export class GdmLiveAudio extends LitElement {
     #google-signin:disabled {
       background-color: #555;
       cursor: not-allowed;
+    }
+    #guest-signin {
+      background: transparent;
+      border: 1px solid #555;
+      color: #bbb;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-top: 15px;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #guest-signin:hover {
+      background-color: rgba(255, 255, 255, 0.1);
+      color: white;
     }
   `;
 
@@ -565,6 +586,7 @@ export class GdmLiveAudio extends LitElement {
         this.loadHistory();
       } else {
         this.user = null;
+        this.isGuestMode = false;
         this.testHistory = []; // Clear history on logout
       }
       this.authInitialized = true;
@@ -585,6 +607,11 @@ export class GdmLiveAudio extends LitElement {
   private async signOutUser() {
     if (!this.firebaseAvailable) return;
     await signOut(this.auth);
+  }
+
+  private signInAsGuest() {
+    this.isGuestMode = true;
+    this.initClient();
   }
 
   private async loadHistory() {
@@ -674,9 +701,18 @@ export class GdmLiveAudio extends LitElement {
                 ...this.currentTranscript,
                 {speaker: 'examiner', text: modelText},
               ];
+              // Check if the AI has finished giving Part 2 instructions
+              if (
+                this.selectedPart === 'part2' &&
+                !this.isPreparing &&
+                !this.isRecording &&
+                modelText.toLowerCase().includes('starts now')
+              ) {
+                this.startPreparationTimer();
+              }
             }
 
-            // FIX: speechRecognitionResult is a top-level property on the message, not nested under serverContent.
+            // FIX: Property 'userContent' does not exist on type 'LiveServerMessage'. speechRecognitionResult is a top-level property.
             const userText =
               message.speechRecognitionResult?.text;
             const isFinal =
@@ -710,8 +746,33 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          systemInstruction:
-            "You are a helpful and friendly IELTS examiner. You will conduct a speaking test with the user. Follow the user's prompts to start the correct part of the test.",
+          systemInstruction: `You are a professional IELTS examiner. Your role is to conduct a simulated IELTS speaking test. Adhere strictly to the official test format, maintaining a professional yet encouraging tone. Do not deviate from the script for each part's instructions.
+
+**General Rules:**
+- When you are given a prompt like "Let's start IELTS Speaking Part X", you must initiate that part of the test according to the instructions below.
+- Do not add any conversational filler that is not part of the standard IELTS script.
+
+**Part 1 Procedure:**
+- **Trigger:** The user prompt "Let's start IELTS Speaking Part 1."
+- **Your Script:**
+  1. Say: "Good morning. My name is [Your Examiner Name]. Welcome to the speaking portion of the IELTS examination. Can you tell me your full name, please? ... And what should I call you? ... Thank you. In this first part, I'd like to ask you some questions about yourself."
+  2. Choose 2-3 different topics from the following list: Work, Studies, Hometown, Home, Accommodation, Art, Birthdays, Childhood, Clothes, Computers, Daily Routine, Dictionaries, Evenings, Family and Friends, Flowers, Food, Going out, Hobbies, Holidays, Internet, Leisure time, Music, Movies, Neighbors, Newspapers, Pets, Reading, Shopping, Sport, TV, Transportation, Travel, Weather.
+  3. Ask 3-4 questions per topic. Use a different set of topics for each new test.
+  4. Conclude Part 1 by saying: "Thank you. That is the end of Part 1."
+
+**Part 2 Procedure:**
+- **Trigger:** You will receive a user prompt containing the cue card topic, like this: "The user is starting Part 2. Please give the standard Part 2 instructions, and then read the following cue card topic verbatim: '[The Cue Card Topic]'".
+- **Your Script:**
+  1. Say: "Now, in this second part, I am going to give you a topic, and I would like you to talk about it for one to two minutes. Before you talk, you will have one minute to think about what you are going to say. You can make notes if you wish. Do you understand?"
+  2. After a brief pause, read the topic you were given verbatim.
+  3. After reading the topic, say: "You have one minute to prepare your answer. Your preparation time starts now."
+
+**Part 3 Procedure:**
+- **Trigger:** The user prompt "Let's start IELTS Speaking Part 3. The topic for Part 2 was: '[The Part 2 Topic]'".
+- **Your Script:**
+  1. Say: "We've been talking about [general theme from Part 2 topic], and I'd like to discuss with you one or two more general questions related to this. First, let's consider..."
+  2. Ask 4-6 abstract, discussion-style questions related to the Part 2 topic. You can ask follow-up questions to probe deeper.
+  3. Conclude the entire test by saying: "Thank you very much. That is the end of the speaking test."`,
         },
       });
     } catch (e) {
@@ -762,10 +823,15 @@ export class GdmLiveAudio extends LitElement {
       }
 
       this.part2Topic = response.text;
-      this.startPreparationTimer();
       this.updateStatus(
-        'Topic generated. You have 1 minute to prepare your answer.',
+        'Listen to the examiner for your topic and instructions.',
       );
+
+      // Trigger the AI to read the instructions and the topic.
+      // The onmessage handler will listen for the cue to start the prep timer.
+      this.session.sendRealtimeInput({
+        text: `The user is starting Part 2. Please give the standard Part 2 instructions, and then read the following cue card topic verbatim: "${this.part2Topic}"`,
+      });
     } catch (e) {
       if (this.part2TopicLoading) {
         this.updateError('Failed to generate topic. Please try again.');
@@ -1133,6 +1199,9 @@ export class GdmLiveAudio extends LitElement {
           <button id="google-signin" @click=${this.signInWithGoogle}>
             Sign in with Google
           </button>
+          <button id="guest-signin" @click=${this.signInAsGuest}>
+            Continue as Guest
+          </button>
         </div>
         <gdm-live-audio-visuals-3d
           .inputNode=${this.inputNode}
@@ -1270,11 +1339,11 @@ export class GdmLiveAudio extends LitElement {
     if (!this.authInitialized && this.firebaseAvailable) {
       return this.renderLoading();
     }
-    // If Firebase is set up but user isn't logged in, show login page.
-    if (!this.user && this.firebaseAvailable) {
+    // If Firebase is set up but user isn't logged in and is not in guest mode, show login page.
+    if (this.firebaseAvailable && !this.user && !this.isGuestMode) {
       return this.renderLogin();
     }
-    // Otherwise (user is logged in, OR Firebase is not configured), show the main app.
+    // Otherwise (user is logged in, OR is in guest mode, OR Firebase is not configured), show the main app.
     return this.renderApp();
   }
 }
