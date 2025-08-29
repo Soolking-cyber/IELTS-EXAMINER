@@ -75,11 +75,11 @@ export class GdmLiveAudio extends LitElement {
   @state()
   isRecording = false;
 
-  @state() status = 'Select a part to begin.';
+  @state() status = 'Session opened. Select a part to begin.';
   @state() error = '';
   @state() selectedPart: 'part1' | 'part2' | 'part3' | null = null;
   @state() timer = 0;
-  @state() timerDisplay = '';
+  @state() timerDisplay = '05:00';
   @state() isTimerRunning = false;
   @state() part2Topic = '';
   @state() part2TopicLoading = false;
@@ -126,8 +126,6 @@ export class GdmLiveAudio extends LitElement {
   private scriptProcessorNode: ScriptProcessorNode;
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
-  private readonly logoUrl =
-    'data:image/png;base64,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';
 
   static styles = css`
     :host {
@@ -135,8 +133,17 @@ export class GdmLiveAudio extends LitElement {
       width: 100vw;
       height: 100vh;
       overflow: hidden;
-      color: white;
-      font-family: sans-serif;
+      background-color: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+        Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+        'Segoe UI Symbol';
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    * {
+      box-sizing: border-box;
     }
 
     .container {
@@ -144,88 +151,37 @@ export class GdmLiveAudio extends LitElement {
       flex-direction: column;
       height: 100%;
       width: 100%;
-      padding: 5vh 24px;
-      box-sizing: border-box;
+      padding: 32px;
       align-items: center;
+      justify-content: space-between;
       position: relative;
     }
 
-    .logo {
-      position: absolute;
-      top: 24px;
-      left: 24px;
-      z-index: 20;
-    }
-
-    .logo img {
-      width: 48px;
-      height: 48px;
-    }
-
-    .top-bar {
-      position: absolute;
-      top: 24px;
-      right: 24px;
-      z-index: 20;
+    .main-content-area {
+      flex-grow: 1;
       display: flex;
       align-items: center;
-      gap: 16px;
-    }
-
-    .top-bar button {
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid white;
-      color: white;
-      padding: 8px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-
-    .top-bar button:hover {
-      background: rgba(255, 255, 255, 0.2);
-    }
-
-    .user-info {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(255, 255, 255, 0.1);
-      padding: 4px 12px;
-      border-radius: 20px;
-    }
-
-    .user-info img {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-    }
-
-    .user-info span {
-      font-weight: bold;
+      justify-content: center;
+      width: 100%;
     }
 
     #status {
-      position: relative;
+      color: #888;
       text-align: center;
-      margin-top: 15px; /* Spacing from controls */
-      font-size: clamp(0.9rem, 3vw, 1rem);
+      font-size: 16px;
+      height: 20px;
+      line-height: 20px;
     }
 
     #cue-card {
-      position: relative;
       width: 100%;
       max-width: 500px;
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid white;
       color: white;
-      padding: 20px;
-      border-radius: 12px;
+      padding: 24px;
       z-index: 5;
-      font-size: clamp(1rem, 4vw, 1.1rem);
+      font-size: 18px;
       line-height: 1.6;
-      white-space: pre-wrap; /* To respect newlines from the AI response */
-      font-family: sans-serif;
+      white-space: pre-wrap;
       text-align: center;
     }
 
@@ -234,58 +190,68 @@ export class GdmLiveAudio extends LitElement {
     }
 
     .bottom-controls {
-      position: relative;
-      margin-top: auto; /* Pushes this to the bottom of the flex container */
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 20px;
-      z-index: 10;
+      gap: 32px;
       width: 100%;
+      z-index: 10;
     }
 
     .controls {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
+      gap: 24px;
+      height: 80px;
+    }
 
-      button {
-        outline: none;
-        border: 1px solid white;
-        color: white;
-        border-radius: 12px;
-        background: transparent;
-        width: 64px;
-        height: 64px;
-        cursor: pointer;
-        font-size: 24px;
-        padding: 0;
-        margin: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: background-color 0.2s;
+    .controls button {
+      outline: none;
+      border: none;
+      color: white;
+      border-radius: 50%;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
 
-        &:hover {
-          background: rgba(255, 255, 255, 0.2);
-        }
+    .controls button:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+      transform: scale(1);
+    }
+    .controls button:not(:disabled):hover {
+      transform: scale(1.05);
+    }
 
-        &:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-          background: transparent;
-        }
-      }
+    #recordButton {
+      width: 80px;
+      height: 80px;
+      border: 3px solid white;
+    }
 
-      #startButton[disabled],
-      #stopButton[disabled] {
-        display: none;
-      }
+    #recordButton svg {
+      transition: all 0.2s ease;
+    }
 
-      #resetButton:disabled {
-        display: block; /* Override default disabled behavior to just change opacity */
-      }
+    #resetButton {
+      width: 56px;
+      height: 56px;
+      border: 2px solid #333;
+    }
+    #resetButton:hover {
+      border-color: #fff;
+    }
+
+    #resetButton svg {
+      width: 28px;
+      height: 28px;
     }
 
     #timer {
@@ -293,25 +259,23 @@ export class GdmLiveAudio extends LitElement {
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      color: white;
-      font-size: clamp(3rem, 15vw, 4rem);
+      color: #c0c0c0;
+      font-size: clamp(2rem, 10vw, 3.5rem);
       z-index: 5;
-      font-family: monospace;
-      opacity: 0;
-      transition: opacity 0.3s;
+      font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace;
+      font-weight: 400;
       pointer-events: none;
     }
 
-    .container.is-preparing #timer,
-    :host([isRecording]) #timer {
-      opacity: 1;
+    #timer[hidden] {
+      display: none;
     }
 
     .ielts-parts {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
+      gap: 12px;
       flex-wrap: wrap;
     }
 
@@ -321,18 +285,19 @@ export class GdmLiveAudio extends LitElement {
 
     .ielts-parts button {
       outline: none;
-      border: 1px solid white;
+      border: none;
       color: white;
-      border-radius: 8px;
-      background: transparent;
-      padding: 8px 16px;
+      border-radius: 99px;
+      background: #1a1a1a;
+      padding: 12px 24px;
       cursor: pointer;
       font-size: 16px;
-      transition: background-color 0.2s, color 0.2s;
+      font-weight: 500;
+      transition: all 0.2s ease;
     }
 
     .ielts-parts button:hover {
-      background: rgba(255, 255, 255, 0.2);
+      background: #2c2c2e;
     }
 
     .ielts-parts button.selected {
@@ -341,12 +306,9 @@ export class GdmLiveAudio extends LitElement {
     }
 
     .ielts-parts button:disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       cursor: not-allowed;
-    }
-
-    .ielts-parts button:disabled:hover {
-      background: transparent;
+      background: #1a1a1a;
     }
 
     /* History Panel Styles */
@@ -354,13 +316,13 @@ export class GdmLiveAudio extends LitElement {
       position: fixed;
       top: 0;
       right: 0;
-      width: min(90vw, 500px);
+      width: min(95vw, 450px);
       height: 100%;
-      background-color: #111;
-      border-left: 1px solid #444;
-      box-shadow: -5px 0 15px rgba(0, 0, 0, 0.5);
+      background-color: #000;
+      border-left: 1px solid #333;
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
       transform: translateX(100%);
-      transition: transform 0.3s ease-in-out;
+      transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
       z-index: 100;
       display: flex;
       flex-direction: column;
@@ -374,13 +336,15 @@ export class GdmLiveAudio extends LitElement {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 16px;
-      border-bottom: 1px solid #444;
+      padding: 16px 20px;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
     }
 
     .history-header h2 {
       margin: 0;
-      font-size: 1.2rem;
+      font-size: 1.1rem;
+      font-weight: 600;
     }
 
     .history-header .close-btn {
@@ -389,12 +353,13 @@ export class GdmLiveAudio extends LitElement {
       color: white;
       font-size: 2rem;
       cursor: pointer;
+      line-height: 1;
     }
 
     .history-content {
       flex-grow: 1;
       overflow-y: auto;
-      padding: 16px;
+      padding: 8px;
     }
 
     .history-list {
@@ -404,80 +369,96 @@ export class GdmLiveAudio extends LitElement {
     }
 
     .history-list li {
-      padding: 12px 8px;
-      border-bottom: 1px solid #333;
+      padding: 12px;
+      border-radius: 8px;
+      margin: 4px;
       cursor: pointer;
       transition: background-color 0.2s;
     }
 
     .history-list li:hover {
-      background-color: #222;
+      background-color: #1a1a1a;
     }
 
     .history-list .test-name {
-      font-weight: bold;
+      font-weight: 600;
     }
     .history-list .test-date,
     .history-list .test-score {
       display: block;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       color: #aaa;
       margin-top: 4px;
+    }
+    .test-details {
+      padding: 12px;
     }
 
     .test-details .back-btn {
       background: none;
-      border: 1px solid white;
+      border: 1px solid #333;
       color: white;
-      padding: 8px 12px;
-      border-radius: 6px;
+      padding: 10px 20px;
+      border-radius: 99px;
       cursor: pointer;
-      margin-bottom: 16px;
+      margin-bottom: 24px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+    .test-details .back-btn:hover {
+      background: #1a1a1a;
+      border-color: #555;
     }
 
     .test-details h3,
     .test-details h4 {
       margin-top: 1.5em;
-      margin-bottom: 0.5em;
+      margin-bottom: 0.75em;
+      font-weight: 600;
+      border-bottom: 1px solid #333;
+      padding-bottom: 8px;
     }
 
     .test-details .feedback {
       white-space: pre-wrap;
-      line-height: 1.6;
-      background-color: #222;
-      padding: 12px;
+      line-height: 1.7;
+      background-color: #1a1a1a;
+      padding: 16px;
       border-radius: 8px;
+      font-size: 15px;
     }
 
     .transcript {
       max-height: 40vh;
       overflow-y: auto;
       border: 1px solid #333;
-      padding: 8px;
+      padding: 16px;
       border-radius: 8px;
     }
 
     .transcript-entry {
-      margin-bottom: 12px;
+      margin-bottom: 16px;
     }
 
     .transcript-entry strong {
       display: block;
       margin-bottom: 4px;
       color: #ccc;
+      font-weight: 600;
     }
 
     .transcript-entry.user strong {
-      color: #87ceeb; /* Sky Blue */
+      color: #a5d8ff;
     }
     .transcript-entry.examiner strong {
-      color: #98fb98; /* Pale Green */
+      color: #a7f0ba;
     }
 
     .transcript-entry p {
       margin: 0;
-      line-height: 1.5;
+      line-height: 1.6;
     }
+
     .loading-container,
     .login-container {
       display: flex;
@@ -486,63 +467,75 @@ export class GdmLiveAudio extends LitElement {
       justify-content: center;
       height: 100%;
       width: 100%;
+      padding: 24px;
       background-color: #000;
     }
+
     .login-box {
-      background: rgba(30, 30, 30, 0.8);
-      padding: 40px 50px;
-      border-radius: 12px;
+      background: transparent;
+      padding: 32px;
+      border-radius: 16px;
       text-align: center;
-      border: 1px solid #444;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      border: none;
+      max-width: 400px;
+      width: 100%;
     }
     .login-box h1 {
       margin-top: 0;
-      margin-bottom: 10px;
-      font-size: 2rem;
+      margin-bottom: 8px;
+      font-size: 1.8rem;
+      font-weight: 600;
+      color: #fff;
     }
     .login-box p {
-      margin-bottom: 30px;
-      color: #bbb;
-      max-width: 300px;
+      margin-bottom: 24px;
+      color: #aaa;
     }
     #google-signin,
     #guest-signin {
       width: 100%;
       box-sizing: border-box;
+      padding: 14px 24px;
+      border-radius: 99px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: none;
     }
     #google-signin {
-      background-color: #4285f4;
-      color: white;
-      border: none;
-      padding: 12px 24px;
-      border-radius: 8px;
-      font-size: 16px;
-      font-weight: bold;
-      cursor: pointer;
-      transition: background-color 0.3s;
+      background-color: #fff;
+      color: #000;
     }
     #google-signin:hover {
-      background-color: #357ae8;
+      background-color: #e0e0e0;
     }
-    #google-signin:disabled {
-      background-color: #555;
-      cursor: not-allowed;
-    }
+
     #guest-signin {
-      background: transparent;
-      border: 1px solid #555;
-      color: #bbb;
-      padding: 10px 20px;
-      border-radius: 8px;
-      font-size: 14px;
-      cursor: pointer;
-      margin-top: 15px;
-      transition: background-color 0.3s, color 0.3s;
+      background: #1a1a1a;
+      color: #fff;
+      margin-top: 12px;
     }
     #guest-signin:hover {
-      background-color: rgba(255, 255, 255, 0.1);
-      color: white;
+      background-color: #2c2c2e;
+    }
+
+    /* Desktop Styles */
+    @media (min-width: 768px) {
+      .container {
+        padding: 48px;
+      }
+      .bottom-controls {
+        gap: 48px;
+        padding-bottom: 32px;
+      }
+      #status {
+        font-size: 16px;
+      }
+      #cue-card {
+        padding: 32px;
+        font-size: 20px;
+      }
     }
   `;
 
@@ -711,12 +704,13 @@ export class GdmLiveAudio extends LitElement {
                 this.startPreparationTimer();
               }
             }
-
-            // FIX: Property 'userContent' does not exist on type 'LiveServerMessage'. speechRecognitionResult is a top-level property.
+            
+            // FIX: The property for speech recognition results is 'speechRecognitionResults' (plural) and it is an array.
+            // FIX: User speech recognition results are nested under the 'userTurn' property, mirroring the 'modelTurn' structure for model responses.
             const userText =
-              message.speechRecognitionResult?.text;
+              message.serverContent?.userTurn?.speechRecognitionResults?.[0]?.text;
             const isFinal =
-              message.speechRecognitionResult?.isFinal;
+              message.serverContent?.userTurn?.speechRecognitionResults?.[0]?.isFinal;
 
             if (userText && isFinal) {
               this.currentTranscript = [
@@ -756,8 +750,8 @@ export class GdmLiveAudio extends LitElement {
 - **Trigger:** The user prompt "Let's start IELTS Speaking Part 1."
 - **Your Script:**
   1. Say: "Good morning. My name is [Your Examiner Name]. Welcome to the speaking portion of the IELTS examination. Can you tell me your full name, please? ... And what should I call you? ... Thank you. In this first part, I'd like to ask you some questions about yourself."
-  2. Choose 2-3 different topics from the following list: Work, Studies, Hometown, Home, Accommodation, Art, Birthdays, Childhood, Clothes, Computers, Daily Routine, Dictionaries, Evenings, Family and Friends, Flowers, Food, Going out, Hobbies, Holidays, Internet, Leisure time, Music, Movies, Neighbors, Newspapers, Pets, Reading, Shopping, Sport, TV, Transportation, Travel, Weather.
-  3. Ask 3-4 questions per topic. Use a different set of topics for each new test.
+  2. To ensure variety, you must select 2-3 different topics for this part. For each new test, you must choose topics you haven't used recently. Draw from the following extensive list: Work, Studies, Hometown, Home, Accommodation, Art, Birthdays, Childhood, Clothes, Computers, Daily Routine, Dictionaries, Evenings, Family and Friends, Flowers, Food, Going out, Hobbies, Holidays, Internet, Leisure time, Music, Movies, Neighbors, Newspapers, Pets, Reading, Shopping, Sport, TV, Transportation, Travel, Weather, Names, Sleep, Public Transportation, Concentration, Weekends, Emails, Social Media, Gifts, Colors, Dreams, Being in a hurry, Puzzles, Sitting down, Noise, Sharing, Teachers, Science, Apps, Websites, Singing, History, Robots.
+  3. Ask 3-4 questions for each topic.
   4. Conclude Part 1 by saying: "Thank you. That is the end of Part 1."
 
 **Part 2 Procedure:**
@@ -976,7 +970,7 @@ export class GdmLiveAudio extends LitElement {
 
       this.isRecording = true;
       this.startTimer();
-      this.updateStatus('🔴 Recording...');
+      this.updateStatus(''); // Clear status during recording
     } catch (err) {
       console.error('Error starting recording:', err);
       this.updateStatus(`Error: ${err.message}`);
@@ -1021,6 +1015,14 @@ export class GdmLiveAudio extends LitElement {
       this.getAndSaveScore();
     } else {
       this.updateStatus(nextStatus);
+    }
+  }
+
+  private toggleRecording() {
+    if (this.isRecording) {
+      this.stopRecording();
+    } else {
+      this.startRecording();
     }
   }
 
@@ -1091,6 +1093,7 @@ export class GdmLiveAudio extends LitElement {
       this.currentTranscript = [];
       this.part1Completed = false;
       this.part2Completed = false;
+      // FIX: Removed typo 't'.
       this.part3Completed = false;
       this.selectedPart = null;
     }
@@ -1105,7 +1108,7 @@ export class GdmLiveAudio extends LitElement {
     this.stopPreparationTimer();
     this.selectedPart = null;
     this.timer = 0;
-    this.timerDisplay = '';
+    this.timerDisplay = '05:00';
     this.part2Topic = '';
     this.part1Completed = false;
     this.part2Completed = false;
@@ -1120,7 +1123,9 @@ export class GdmLiveAudio extends LitElement {
 
   private renderHistoryList() {
     if (this.testHistory.length === 0) {
-      return html`<p>No test history found.</p>`;
+      return html`<p style="padding: 16px; text-align: center; color: #aaa;">
+        No test history found.
+      </p>`;
     }
     return html`
       <ul class="history-list">
@@ -1146,13 +1151,15 @@ export class GdmLiveAudio extends LitElement {
         </button>
         <h3>Overall Score: ${this.selectedTest.score}</h3>
         <h4>Feedback</h4>
-        <p class="feedback">${this.selectedTest.feedback}</p>
+        <div class="feedback">${this.selectedTest.feedback}</div>
         <h4>Transcript</h4>
         <div class="transcript">
           ${this.selectedTest.transcript.map(
             (entry) => html`
               <div class="transcript-entry ${entry.speaker}">
-                <strong>${entry.speaker === 'user' ? 'You' : 'Examiner'}:</strong>
+                <strong>${
+                  entry.speaker === 'user' ? 'You' : 'Examiner'
+                }:</strong>
                 <p>${entry.text}</p>
               </div>
             `,
@@ -1203,50 +1210,21 @@ export class GdmLiveAudio extends LitElement {
             Continue as Guest
           </button>
         </div>
-        <gdm-live-audio-visuals-3d
-          .inputNode=${this.inputNode}
-          .outputNode=${this.outputNode}></gdm-live-audio-visuals-3d>
       </div>
     `;
   }
 
   private renderApp() {
+    const isCueCardActive = this.selectedPart === 'part2' && !this.isRecording;
     return html`
       ${this.user ? this.renderHistoryPanel() : ''}
-      <div class="container ${this.isPreparing ? 'is-preparing' : ''}">
-        <div class="logo">
-          <img src=${this.logoUrl} alt="App Logo" />
-        </div>
-        <div class="top-bar">
-          ${this.user
-            ? html`
-                <div class="user-info">
-                  <img
-                    src=${this.user.photoURL}
-                    alt="User profile picture"
-                    referrerpolicy="no-referrer" />
-                  <span>${this.user.displayName}</span>
-                </div>
-                <button
-                  id="historyButton"
-                  @click=${() => (this.isHistoryVisible = !this.isHistoryVisible)}>
-                  Test History
-                </button>
-                <button id="signOutButton" @click=${this.signOutUser}>
-                  Sign Out
-                </button>
-              `
-            : html`
-                <div class="user-info">
-                  <span>Guest Mode</span>
-                </div>
-              `}
-        </div>
-
-        <div
-          id="cue-card"
-          ?hidden=${this.selectedPart !== 'part2' || this.isRecording}>
-          ${this.part2TopicLoading ? 'Generating topic...' : this.part2Topic}
+      <div class="container">
+        <div class="main-content-area">
+          <div
+            id="cue-card"
+            ?hidden=${!isCueCardActive}>
+            ${this.part2TopicLoading ? 'Generating topic...' : this.part2Topic}
+          </div>
         </div>
 
         <div class="bottom-controls">
@@ -1257,7 +1235,7 @@ export class GdmLiveAudio extends LitElement {
               class=${this.selectedPart === 'part1' ? 'selected' : ''}
               @click=${() => this.selectPart('part1')}
               ?disabled=${this.isRecording || this.isPreparing}>
-              IELTS Part 1
+              Part 1
             </button>
             <button
               class=${this.selectedPart === 'part2' ? 'selected' : ''}
@@ -1265,7 +1243,7 @@ export class GdmLiveAudio extends LitElement {
               ?disabled=${
                 this.isRecording || this.isPreparing || !this.part1Completed
               }>
-              IELTS Part 2
+              Part 2
             </button>
             <button
               class=${this.selectedPart === 'part3' ? 'selected' : ''}
@@ -1273,7 +1251,7 @@ export class GdmLiveAudio extends LitElement {
               ?disabled=${
                 this.isRecording || this.isPreparing || !this.part2Completed
               }>
-              IELTS Part 3
+              Part 3
             </button>
           </div>
 
@@ -1284,49 +1262,45 @@ export class GdmLiveAudio extends LitElement {
               ?disabled=${this.isRecording}>
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                height="40px"
                 viewBox="0 -960 960 960"
-                width="40px"
                 fill="#ffffff">
                 <path
                   d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z" />
               </svg>
             </button>
             <button
-              id="startButton"
-              @click=${this.startRecording}
+              id="recordButton"
+              @click=${this.toggleRecording}
               ?disabled=${
-                this.isRecording || !this.selectedPart || this.isPreparing
+                !this.selectedPart || this.isPreparing || this.isScoring
               }>
-              <svg
-                viewBox="0 0 100 100"
-                width="32px"
-                height="32px"
-                fill="white"
-                xmlns="http://www.w3.org/2000/svg">
-                <circle cx="50" cy="50" r="45" />
-              </svg>
+              ${this.isRecording
+                ? html`<svg
+                    viewBox="0 0 100 100"
+                    width="32px"
+                    height="32px"
+                    fill="white">
+                    <rect x="15" y="15" width="70" height="70" rx="8" />
+                  </svg>`
+                : html`<svg
+                    viewBox="0 0 100 100"
+                    width="36px"
+                    height="36px"
+                    fill="white">
+                    <circle cx="50" cy="50" r="50" />
+                  </svg>`}
             </button>
-            <button
-              id="stopButton"
-              @click=${this.stopRecording}
-              ?disabled=${!this.isRecording}>
-              <svg
-                viewBox="0 0 100 100"
-                width="32px"
-                height="32px"
-                fill="white"
-                xmlns="http://www.w3.org/2000/svg">
-                <rect x="15" y="15" width="70" height="70" rx="10" />
-              </svg>
-            </button>
+            <div style="width: 56px; height: 56px;"></div>
           </div>
+          <div id="status">${this.error || this.status}</div>
         </div>
-
-        <div id="status">${this.error || this.status}</div>
       </div>
-      <div id="timer">
-        ${this.isPreparing ? this.preparationTimerDisplay : this.timerDisplay}
+      <div id="timer" ?hidden=${isCueCardActive}>
+        ${this.isRecording || this.isPreparing
+          ? this.isPreparing
+            ? this.preparationTimerDisplay
+            : this.timerDisplay
+          : ''}
       </div>
       <gdm-live-audio-visuals-3d
         .inputNode=${this.inputNode}

@@ -30,7 +30,7 @@ export class GdmLiveAudioVisuals3D extends LitElement {
   private circle!: Line2;
   private segments = 256;
 
-  private smoothedRadii = new Float32Array(this.segments).fill(0.9);
+  private smoothedRadii = new Float32Array(this.segments).fill(1.1);
   private smoothedZ = new Float32Array(this.segments).fill(0);
   private smoothingFactor = 0.4;
 
@@ -66,7 +66,7 @@ export class GdmLiveAudioVisuals3D extends LitElement {
       height: 100% !important;
       position: absolute;
       inset: 0;
-      z-index: -1;
+      z-index: 1;
     }
   `;
 
@@ -89,12 +89,13 @@ export class GdmLiveAudioVisuals3D extends LitElement {
     const renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
+      alpha: true,
     });
-    renderer.setClearColor(0x000000); // Set background to black
+    renderer.setClearColor(0x000000, 0); // Set background to transparent
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
 
-    const radius = 0.9;
+    const radius = 1.1;
     const positions = new Float32Array((this.segments + 1) * 3);
 
     for (let i = 0; i <= this.segments; i++) {
@@ -153,7 +154,7 @@ export class GdmLiveAudioVisuals3D extends LitElement {
     this.outputAnalyser.update();
 
     const positions = new Float32Array((this.segments + 1) * 3);
-    const baseRadius = 0.9;
+    const baseRadius = 1.1;
     const inputData = this.inputAnalyser.data;
     const outputData = this.outputAnalyser.data;
     const dataLength = inputData.length;
@@ -195,7 +196,7 @@ export class GdmLiveAudioVisuals3D extends LitElement {
         ) / 255;
 
       // Smoothly update radius based on input
-      const targetRadius = baseRadius + inputMagnitude * 0.9;
+      const targetRadius = baseRadius + inputMagnitude * 1.1;
       this.smoothedRadii[i] = THREE.MathUtils.lerp(
         this.smoothedRadii[i],
         targetRadius,
