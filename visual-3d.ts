@@ -17,7 +17,6 @@ import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
 import {Line2} from 'three/addons/lines/Line2.js';
 import {LineMaterial} from 'three/addons/lines/LineMaterial.js';
 import {LineGeometry} from 'three/addons/lines/LineGeometry.js';
-import * as backdropShader from './backdrop-shader';
 
 /**
  * 3D live audio visual.
@@ -31,11 +30,9 @@ export class GdmLiveAudioVisuals3D extends LitElement {
   private circle!: Line2;
   private segments = 256;
 
-  private smoothedRadii = new Float32Array(this.segments).fill(1.5);
+  private smoothedRadii = new Float32Array(this.segments).fill(0.9);
   private smoothedZ = new Float32Array(this.segments).fill(0);
   private smoothingFactor = 0.4;
-  private clock = new THREE.Clock();
-  private backdrop!: THREE.Mesh;
 
   private _outputNode!: AudioNode;
 
@@ -89,31 +86,15 @@ export class GdmLiveAudioVisuals3D extends LitElement {
     camera.position.set(0, 0, 5);
     this.camera = camera;
 
-    // Create backdrop
-    const backdropGeometry = new THREE.PlaneGeometry(2, 2);
-    const backdropMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        resolution: {
-          value: new THREE.Vector2(window.innerWidth, window.innerHeight),
-        },
-        time: {value: 0.0},
-        rand: {value: Math.random()},
-      },
-      vertexShader: backdropShader.vs,
-      fragmentShader: backdropShader.fs,
-    });
-    this.backdrop = new THREE.Mesh(backdropGeometry, backdropMaterial);
-    this.backdrop.position.set(0, 0, -10);
-    scene.add(this.backdrop);
-
     const renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
     });
+    renderer.setClearColor(0x000000); // Set background to black
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
 
-    const radius = 1.5;
+    const radius = 0.9;
     const positions = new Float32Array((this.segments + 1) * 3);
 
     for (let i = 0; i <= this.segments; i++) {
@@ -127,7 +108,7 @@ export class GdmLiveAudioVisuals3D extends LitElement {
     geometry.setPositions(positions);
 
     const material = new LineMaterial({
-      color: 0x87ceeb,
+      color: 0xffffff,
       linewidth: 5, // in pixels
     });
     material.resolution.set(window.innerWidth, window.innerHeight);
@@ -153,11 +134,6 @@ export class GdmLiveAudioVisuals3D extends LitElement {
           window.innerHeight,
         );
       }
-      if (this.backdrop) {
-        (
-          this.backdrop.material as THREE.ShaderMaterial
-        ).uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
-      }
     };
 
     window.addEventListener('resize', onWindowResize);
@@ -173,37 +149,33 @@ export class GdmLiveAudioVisuals3D extends LitElement {
       return;
     }
 
-    // Update backdrop shader time
-    const elapsedTime = this.clock.getElapsedTime();
-    (
-      this.backdrop.material as THREE.ShaderMaterial
-    ).uniforms.time.value = elapsedTime;
-
     this.inputAnalyser.update();
     this.outputAnalyser.update();
 
     const positions = new Float32Array((this.segments + 1) * 3);
-    const baseRadius = 1.5;
+    const baseRadius = 0.9;
     const inputData = this.inputAnalyser.data;
     const outputData = this.outputAnalyser.data;
     const dataLength = inputData.length;
 
     if (!dataLength) return;
 
-    // --- Color logic ---
-    const inputSum = inputData.reduce((a, b) => a + b, 0);
-    const outputSum = outputData.reduce((a, b) => a + b, 0);
-    const totalAvg = (inputSum + outputSum) / (dataLength * 2);
-    const colorIntensity = Math.min(totalAvg / 80, 1.0); // Normalize
-    const baseColor = new THREE.Color(0x87ceeb); // Sky Blue
-    const highlightColor = new THREE.Color(0xffffff); // White
-    (this.circle.material as LineMaterial).color
-      .copy(baseColor)
-      .lerp(highlightColor, colorIntensity);
-
     // --- Shape logic ---
     for (let i = 0; i < this.segments; i++) {
-      const dataRatio = i / this.segments;
+      // Symmetrically map the frequency data to the circle.
+      // This maps the low-to-high frequency range to the right half of the
+      // circle, and then mirrors it (high-to-low) for the left half,
+      // creating a horizontally symmetrical visualization.
+      let dataRatio;
+      const halfSegments = this.segments / 2;
+      if (i <= halfSegments) {
+        // First half of the circle (0 to PI radians)
+        dataRatio = i / halfSegments;
+      } else {
+        // Second half of the circle (PI to 2*PI radians)
+        dataRatio = (this.segments - i) / halfSegments;
+      }
+
       const dataPos = dataRatio * (dataLength - 1);
       const dataIndex = Math.floor(dataPos);
       const nextDataIndex = Math.min(dataIndex + 1, dataLength - 1);
@@ -223,7 +195,7 @@ export class GdmLiveAudioVisuals3D extends LitElement {
         ) / 255;
 
       // Smoothly update radius based on input
-      const targetRadius = baseRadius + inputMagnitude * 1.5;
+      const targetRadius = baseRadius + inputMagnitude * 0.9;
       this.smoothedRadii[i] = THREE.MathUtils.lerp(
         this.smoothedRadii[i],
         targetRadius,

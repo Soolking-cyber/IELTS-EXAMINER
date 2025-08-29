@@ -2,20 +2,12 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-const vs = `precision highp float;
-
-in vec3 position;
-
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-
+const vs = `
 void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
 }`;
 
 const fs = `precision highp float;
-
-out vec4 fragmentColor;
 
 uniform vec2 resolution;
 uniform float time;
@@ -87,7 +79,7 @@ void main() {
               vec3(0.8,0.9,1.0),
               clamp(length(r.x),0.0,1.0));
 
-  fragmentColor = vec4((f*f*f+.6*f*f+.5*f)*color, 1.);
+  gl_FragColor = vec4((f*f*f+.6*f*f+.5*f)*color, 1.);
 }
 `;
 

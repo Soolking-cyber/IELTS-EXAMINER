@@ -41,12 +41,12 @@ import {
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
+  apiKey: 'AIzaSyDLkOMHGGrxwtHA9lWZeY5yLFpRTsZeqdU',
+  authDomain: 'ielts-8334c.firebaseapp.com',
+  projectId: 'ielts-8334c',
+  storageBucket: 'ielts-8334c.firebasestorage.app',
+  messagingSenderId: '738799923949',
+  appId: '1:738799923949:web:2e8251461ac7f3160552e4',
 };
 
 // A flag to check if firebase config is valid
@@ -125,6 +125,8 @@ export class GdmLiveAudio extends LitElement {
   private scriptProcessorNode: ScriptProcessorNode;
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
+  private readonly logoUrl =
+    'data:image/png;base64,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';
 
   static styles = css`
     :host {
@@ -145,6 +147,18 @@ export class GdmLiveAudio extends LitElement {
       box-sizing: border-box;
       align-items: center;
       position: relative;
+    }
+
+    .logo {
+      position: absolute;
+      top: 24px;
+      left: 24px;
+      z-index: 20;
+    }
+
+    .logo img {
+      width: 48px;
+      height: 48px;
     }
 
     .top-bar {
@@ -662,12 +676,11 @@ export class GdmLiveAudio extends LitElement {
               ];
             }
 
-            // FIX: The speechRecognitionResult is a property of userTurn, not directly on serverContent.
+            // FIX: speechRecognitionResult is a top-level property on the message, not nested under serverContent.
             const userText =
-              message.serverContent?.userTurn?.speechRecognitionResult?.text;
+              message.speechRecognitionResult?.text;
             const isFinal =
-              message.serverContent?.userTurn?.speechRecognitionResult
-                ?.isFinal;
+              message.speechRecognitionResult?.isFinal;
 
             if (userText && isFinal) {
               this.currentTranscript = [
@@ -1132,6 +1145,9 @@ export class GdmLiveAudio extends LitElement {
     return html`
       ${this.user ? this.renderHistoryPanel() : ''}
       <div class="container ${this.isPreparing ? 'is-preparing' : ''}">
+        <div class="logo">
+          <img src=${this.logoUrl} alt="App Logo" />
+        </div>
         <div class="top-bar">
           ${this.user
             ? html`
