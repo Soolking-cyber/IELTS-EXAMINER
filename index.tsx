@@ -1384,14 +1384,21 @@ export class GdmLiveAudio extends LitElement {
 
 
   private async transcribeChunk(blob: Blob) {
-    const sttUrl = (process.env.STT_URL || '').trim();
-    if (!sttUrl) return; // Not configured
+    let base = '/api/stt';
+    const direct = (process.env.STT_URL || '').trim();
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname;
+      const isVercel = /vercel\.app$/i.test(host);
+      if (!isVercel && direct) base = direct.replace(/\/$/, '') + '/stt';
+    } else if (direct) {
+      base = direct.replace(/\/$/, '') + '/stt';
+    }
     try {
       const fd = new FormData();
       const file = new File([blob], 'chunk.webm', { type: blob.type || 'audio/webm' });
       fd.append('audio', file);
       const qs = new URLSearchParams({ language: 'en' }).toString();
-      const res = await fetch(`${sttUrl.replace(/\/$/, '')}/stt?${qs}`, {
+      const res = await fetch(`${base}?${qs}`, {
         method: 'POST',
         body: fd,
       });
