@@ -96,6 +96,7 @@ export class GdmLiveAudio extends LitElement {
   @state() inputNode = this.inputAudioContext.createGain();
   @state() outputNode = this.outputAudioContext.createGain();
   private nextStartTime = 0;
+  private audioEvents = 0;
   private mediaStream: MediaStream;
   private sourceNode: AudioBufferSourceNode;
   private mediaRecorder: MediaRecorder | null = null;
@@ -786,6 +787,7 @@ export class GdmLiveAudio extends LitElement {
             const audioPart = parts.find((p: any) => p?.inlineData);
             const audio = audioPart?.inlineData;
             if (audio) {
+              this.audioEvents++;
               this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
               const audioBuffer = await decodeAudioData(
                 decode(audio.data),
@@ -932,8 +934,24 @@ export class GdmLiveAudio extends LitElement {
     for (const line of lines) {
       if (this.speakCancel) break;
       this.addExaminer(line);
+      const before = this.audioEvents;
       try { this.session.sendRealtimeInput({ text: line }); } catch {}
-      await new Promise((r) => setTimeout(r, 250));
+      // Wait briefly for audio; fallback to SpeechSynthesis if nothing arrives
+      const waited = 800;
+      await new Promise((r) => setTimeout(r, waited));
+      if (this.audioEvents === before) {
+        // Fallback TTS
+        try {
+          const synth: any = (window as any).speechSynthesis;
+          if (synth) {
+            const u = new SpeechSynthesisUtterance(line);
+            u.lang = 'en-US';
+            synth.speak(u);
+          }
+        } catch {}
+      }
+      if (this.speakCancel) break;
+      await new Promise((r) => setTimeout(r, 200));
     }
     this.speaking = false;
   }
