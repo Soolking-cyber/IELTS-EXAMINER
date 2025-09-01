@@ -22,8 +22,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const sttBase = process.env.STT_URL;
-    if (!sttBase) return res.status(500).json({ error: 'STT_URL not configured' });
+    const sttBase = process.env.UNMUTE_URL || process.env.STT_URL;
+    if (!sttBase) return res.status(500).json({ error: 'UNMUTE_URL/STT_URL not configured' });
     const url = new URL(req.url, 'http://localhost');
     const qs = url.search || '';
 

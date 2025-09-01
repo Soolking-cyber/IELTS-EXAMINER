@@ -13,6 +13,15 @@ image = (
         "python3-venv",
         "git",
     )
+    .pip_install(
+        [
+            "fastapi==0.115.6",
+            "uvicorn==0.34.0",
+            "httpx==0.27.2",
+            "python-multipart==0.0.9",
+            "faster-whisper==1.0.3",
+        ]
+    )
 )
 
 app = App("unmute-backend-modal", image=image)
@@ -133,8 +142,56 @@ def unmute_app():
                 return {"error": "tts_failed", "detail": str(e)}, 500
 
     @app.post("/stt")
-    async def stt_proxy():
-        return {"error": "unmute_stt_not_wired"}, 501
+    async def stt_proxy(audio: bytes = None):
+        # Accept multipart or raw bytes and transcribe with faster-whisper as a bridge
+        import tempfile, os, subprocess
+        from faster_whisper import WhisperModel
+        # Read body
+        body = None
+        if audio is not None and len(audio) > 0:
+            body = audio
+        else:
+            # In case of multipart/form-data, FastAPI parsed file is not bound in this signature.
+            # Attempt to read from request stream is complex here; recommend client send as raw or form field name 'audio'.
+            pass
+        if not body:
+            return {"text": "", "note": "empty_or_short_chunk"}, 200
+
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            tmp.write(body)
+            tmp.flush()
+            in_path = tmp.name
+        wav_path = in_path + ".wav"
+        try:
+            # Transcode to 16k mono wav
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", in_path,
+                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                wav_path,
+            ]
+            r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if r.returncode != 0:
+                return {"text": "", "error": "ffmpeg_failed", "stderr": (r.stderr or "")[:500]}, 200
+            try:
+                if os.path.getsize(wav_path) < 1024:
+                    return {"text": "", "note": "empty_or_short_chunk"}, 200
+            except Exception:
+                return {"text": "", "note": "no_output_file"}, 200
+            # Transcribe
+            model = getattr(app.state, "whisper_model", None)
+            if model is None:
+                model = WhisperModel("small.en", compute_type="int8")
+                app.state.whisper_model = model
+            segments, info = model.transcribe(wav_path, beam_size=5, language="en")
+            text = "".join(seg.text for seg in segments).strip()
+            return {"text": text, "language": getattr(info, 'language', 'en'), "duration": getattr(info, 'duration', 0)}
+        finally:
+            for p in (in_path, wav_path):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
     # OpenRouter LLM proxy (same model as before)
     @app.post("/llm")
