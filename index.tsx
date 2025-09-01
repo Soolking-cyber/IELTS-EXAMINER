@@ -782,7 +782,9 @@ export class GdmLiveAudio extends LitElement {
             this.updateStatus('Ready. Select a part to begin.');
           },
           onmessage: async (message: LiveServerMessage) => {
-            const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
+            const parts: any[] = (message as any)?.serverContent?.modelTurn?.parts || [];
+            const audioPart = parts.find((p: any) => p?.inlineData);
+            const audio = audioPart?.inlineData;
             if (audio) {
               this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
               const audioBuffer = await decodeAudioData(
@@ -1286,6 +1288,7 @@ export class GdmLiveAudio extends LitElement {
     }
 
     this.inputAudioContext.resume();
+    try { await this.outputAudioContext.resume(); } catch {}
     this.updateStatus('Requesting microphone access...');
 
     try {
