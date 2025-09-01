@@ -1,0 +1,173 @@
+from modal import Image, App, asgi_app, Secret, gpu
+
+# GPU image with build tools and ffmpeg
+image = (
+    Image.debian_slim()
+    .apt_install(
+        "ffmpeg",
+        "curl",
+        "pkg-config",
+        "build-essential",
+        "cmake",
+        "libssl-dev",
+        "python3-venv",
+        "git",
+    )
+)
+
+app = App("unmute-backend-modal", image=image)
+
+CONFIGS_LOCAL = "/root/configs"
+
+
+@app.function(gpu="A10G", secrets=[Secret.from_name("hf"), Secret.from_name("openrouter")])
+@asgi_app()
+def unmute_app():
+    import os
+    import subprocess
+    import shutil
+    import time
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    import httpx
+
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    def ensure_rust():
+        if shutil.which("cargo"):
+            return
+        subprocess.run(
+            [
+                "bash",
+                "-lc",
+                "curl -fsSL https://sh.rustup.rs -sSf | sh -s -- -y && source $HOME/.cargo/env",
+            ],
+            check=True,
+        )
+
+    def ensure_moshi():
+        if shutil.which("moshi-server"):
+            return
+        env = os.environ.copy()
+        env.setdefault("CXXFLAGS", "-include cstdint")
+        try:
+            subprocess.run([
+                "bash","-lc",
+                "source $HOME/.cargo/env || true; cargo install --features cuda moshi-server@0.6.3"], check=True, env=env)
+        except subprocess.CalledProcessError:
+            subprocess.run([
+                "bash","-lc",
+                "source $HOME/.cargo/env || true; cargo install moshi-server@0.6.3"], check=True, env=env)
+
+    @app.on_event("startup")
+    async def startup():
+        ensure_rust()
+        ensure_moshi()
+        # Copy configs into container path
+        os.makedirs("/root/configs", exist_ok=True)
+        # Try to copy from mounted working dir if present
+        src = "/root/project/vendor/unmute/services/moshi-server/configs"
+        if os.path.isdir(src):
+            subprocess.run(["bash","-lc", f"cp -r {src}/* {CONFIGS_LOCAL}/ || true"], check=False)
+        # Start TTS and STT workers
+        app.state.tts = subprocess.Popen(
+            [
+                "bash",
+                "-lc",
+                f"source $HOME/.cargo/env || true; moshi-server worker --config {CONFIGS_LOCAL}/tts.toml --port 8089",
+            ]
+        )
+        app.state.stt = subprocess.Popen(
+            [
+                "bash",
+                "-lc",
+                f"source $HOME/.cargo/env || true; moshi-server worker --config {CONFIGS_LOCAL}/stt.toml --port 8090",
+            ]
+        )
+        time.sleep(3)
+
+    @app.on_event("shutdown")
+    async def shutdown():
+        for p in (getattr(app.state, "tts", None), getattr(app.state, "stt", None)):
+            if p and p.poll() is None:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+
+    @app.get("/health")
+    async def health():
+        ok = True
+        async with httpx.AsyncClient(timeout=2) as client:
+            try:
+                await client.get("http://127.0.0.1:8089/health")
+                await client.get("http://127.0.0.1:8090/health")
+            except Exception:
+                ok = False
+        return {"status": "ok" if ok else "degraded"}
+
+    @app.post("/tts")
+    async def tts(payload: dict):
+        text = (payload or {}).get("text", "").strip()
+        if not text:
+            return {"error": "no_text"}, 400
+        async with httpx.AsyncClient(timeout=60) as client:
+            try:
+                r = await client.post(
+                    "http://127.0.0.1:8089/api/tts_streaming",
+                    json={"text": text, "voice": payload.get("voice")},
+                )
+                if r.status_code >= 400:
+                    return {"error": "upstream_error", "status": r.status_code, "body": r.text[:500]}, r.status_code
+                ct = r.headers.get("content-type", "application/json")
+                if ct.startswith("application/json"):
+                    return r.json()
+                return {"audio": r.text}
+            except Exception as e:
+                return {"error": "tts_failed", "detail": str(e)}, 500
+
+    @app.post("/stt")
+    async def stt_proxy():
+        return {"error": "unmute_stt_not_wired"}, 501
+
+    # OpenRouter LLM proxy (same model as before)
+    @app.post("/llm")
+    async def llm(payload: dict):
+        import httpx, os
+        OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+        if not OPENROUTER_API_KEY:
+            return {"error": "OPENROUTER_API_KEY not configured"}, 500
+        model = payload.get("model") or "openai/gpt-oss-20b:free"
+        messages = payload.get("messages") or []
+        system = payload.get("system")
+        if system:
+            messages = [{"role": "system", "content": system}] + messages
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": payload.get("temperature", 0.6),
+        }
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": os.environ.get("SITE_URL", "https://example.com"),
+            "X-Title": "IELTS-EXAMINER",
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post("https://openrouter.ai/api/v1/chat/completions", json=data, headers=headers)
+            if r.status_code >= 400:
+                return {"error": "upstream_error", "status": r.status_code, "body": r.text[:500]}, r.status_code
+            try:
+                obj = r.json()
+                content = obj.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return {"text": content}
+            except Exception:
+                return {"raw": r.text}, 200
+
+    return app
