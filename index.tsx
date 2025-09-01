@@ -64,6 +64,8 @@ export class GdmLiveAudio extends LitElement {
   @state() isHistoryVisible = false;
   @state() selectedTest: TestRecord | null = null;
   @state() isScoring = false;
+  @state() isProfileVisible = false;
+  @state() profileTab: 'profile' | 'history' = 'profile';
   // Speech-to-text (browser)
   private recognition: any = null;
   private sttRestartOnEnd = false;
@@ -279,24 +281,81 @@ export class GdmLiveAudio extends LitElement {
       z-index: 10;
     }
 
-    .history-toggle {
-      width: 100%;
+    /* Profile button (top-right) */
+    #profileBtn {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 100;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1px solid #333;
+      background: #0b0b0b;
+      color: #fff;
       display: flex;
-      justify-content: flex-end;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
     }
-    .history-toggle button {
+    #profileBtn:hover { background: #151515; }
+
+    /* Profile Panel */
+    #profilePanel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: min(95vw, 420px);
+      height: 100%;
+      background-color: #000;
+      border-left: 1px solid #333;
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+      z-index: 120;
+      display: flex;
+      flex-direction: column;
+    }
+    #profilePanel.visible { transform: translateX(0); }
+    .profile-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #333;
+    }
+    .tabs { display: flex; gap: 8px; }
+    .tabs button {
       background: none;
       border: 1px solid #333;
-      color: white;
-      padding: 8px 14px;
-      border-radius: 99px;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 16px;
       cursor: pointer;
       font-size: 14px;
     }
-    .history-toggle button:hover {
-      background: #1a1a1a;
-      border-color: #555;
+    .tabs button.active { background: #1a1a1a; }
+    .profile-header .close-btn {
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 22px;
+      cursor: pointer;
+      line-height: 1;
     }
+    .profile-content { flex: 1; overflow-y: auto; padding: 10px 12px; }
+    .profile-footer { border-top: 1px solid #333; padding: 10px 12px; }
+    .logout-btn {
+      width: 100%;
+      background: none;
+      border: 1px solid #333;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 24px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .logout-btn:hover { background: #1a1a1a; border-color: #555; }
 
     .controls {
       display: flex;
@@ -1506,7 +1565,7 @@ export class GdmLiveAudio extends LitElement {
       this.selectedPart === 'part2' && (this.part2TopicLoading || this.isPreparing);
     const showPrompt = false;
     return html`
-      ${this.user ? this.renderHistoryPanel() : ''}
+      ${this.user ? this.renderProfilePanel() : ''}
       <div class="container">
         <div class="main-content-area">
           ${showPrompt
@@ -1519,13 +1578,6 @@ export class GdmLiveAudio extends LitElement {
         </div>
 
         <div class="bottom-controls">
-          ${this.user
-            ? html`<div class="history-toggle">
-                <button @click=${() => (this.isHistoryVisible = !this.isHistoryVisible)}>
-                  ${this.isHistoryVisible ? 'Close History' : 'My History'}
-                </button>
-              </div>`
-            : ''}
           <div
             class="ielts-parts"
             ?hidden=${this.isRecording || this.isPreparing}>
@@ -1608,10 +1660,54 @@ export class GdmLiveAudio extends LitElement {
             <div id="prep-countdown">${this.preparationTimerDisplay}</div>
           </div>`
         : ''}
+      ${this.user
+        ? html`<button id="profileBtn" @click=${() => { this.isProfileVisible = !this.isProfileVisible; }}>
+            ${this.user?.user_metadata?.full_name ? (this.user.user_metadata.full_name[0] || 'U') : 'U'}
+          </button>`
+        : ''}
       <gdm-live-audio-visuals-3d
         .inputNode=${this.inputNode}
         .outputNode=${this.outputNode}></gdm-live-audio-visuals-3d>
     `;
+  }
+
+  private renderProfilePanel() {
+    return html`
+      <div id="profilePanel" class=${this.isProfileVisible ? 'visible' : ''}>
+        <div class="profile-header">
+          <div class="tabs">
+            <button class=${this.profileTab === 'profile' ? 'active' : ''} @click=${() => (this.profileTab = 'profile')}>Profile</button>
+            <button class=${this.profileTab === 'history' ? 'active' : ''} @click=${() => (this.profileTab = 'history')}>History</button>
+          </div>
+          <button class="close-btn" aria-label="Close" @click=${() => (this.isProfileVisible = false)}>&times;</button>
+        </div>
+        <div class="profile-content">
+          ${this.profileTab === 'profile' ? this.renderProfileTab() : this.renderHistoryTab()}
+        </div>
+        <div class="profile-footer">
+          <button class="logout-btn" @click=${this.signOutUser}>Logout</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderProfileTab() {
+    const name = (this.user && (this.user.user_metadata?.full_name || this.user.email)) || 'User';
+    const scores = this.testHistory.map((t) => `${t.date}: ${t.name} — ${t.score}`);
+    return html`
+      <div>
+        <h3 style="margin:8px 0 4px;">${name}</h3>
+        <div style="color:#aaa; font-size:14px; margin-bottom:10px;">Signed in with Google</div>
+        <h4 style="margin:12px 0 6px;">Previous Scores</h4>
+        ${scores.length === 0
+          ? html`<div style="color:#aaa;">No tests yet.</div>`
+          : html`<ul style="margin:0; padding-left:18px;">${scores.map((s) => html`<li>${s}</li>`)}</ul>`}
+      </div>
+    `;
+  }
+
+  private renderHistoryTab() {
+    return html`${this.selectedTest ? this.renderTestDetails() : this.renderHistoryList()}`;
   }
 
   private renderPart1Card() {
