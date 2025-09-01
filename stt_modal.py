@@ -2,6 +2,7 @@ from modal import Image, App, asgi_app
 from typing import Optional
 import tempfile
 import os
+import subprocess
 
 # Build image with faster-whisper and ffmpeg available
 image = (
@@ -56,20 +57,62 @@ def fastapi_app():
 
     @app.post("/stt")
     async def stt(audio: UploadFile = File(...), language: Optional[str] = "en"):
-        # Persist upload to a temporary file for the model
-        with tempfile.NamedTemporaryFile(suffix=os.path.splitext(audio.filename or "audio")[1], delete=False) as tmp:
+        # Persist upload to a temporary file
+        suffix = os.path.splitext(audio.filename or "audio.webm")[1] or ".webm"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(await audio.read())
             tmp.flush()
-            tmp_path = tmp.name
+            in_path = tmp.name
 
+        # Transcode to mono 16k WAV for robust decoding
+        wav_path = in_path + ".wav"
         try:
-            segments, info = model.transcribe(tmp_path, beam_size=5, language=language)
-            text = "".join(seg.text for seg in segments).strip()
-            return {"text": text, "language": info.language, "duration": info.duration}
-        finally:
+            # First attempt: standard transcode to 16k mono PCM WAV
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", in_path,
+                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                wav_path,
+            ]
+            r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if r.returncode != 0:
+                # Fallback 1: add genpts and force container probing
+                cmd2 = [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-fflags", "+genpts",
+                    "-i", in_path,
+                    "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                    wav_path,
+                ]
+                r2 = subprocess.run(cmd2, check=False, capture_output=True, text=True)
+                if r2.returncode != 0:
+                    # Fallback 2: assume webm container
+                    cmd3 = [
+                        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                        "-f", "webm", "-i", in_path,
+                        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                        wav_path,
+                    ]
+                    r3 = subprocess.run(cmd3, check=False, capture_output=True, text=True)
+                    if r3.returncode != 0:
+                        # Give up: surface decoder stderr for debugging
+                        return {"text": "", "error": "ffmpeg_failed", "stderr": (r.stderr or r2.stderr or r3.stderr)[:500]}, 200
+
+            # If file is tiny, return empty text instead of 500
             try:
-                os.remove(tmp_path)
+                if os.path.getsize(wav_path) < 1024:
+                    return {"text": "", "note": "empty_or_short_chunk"}, 200
             except Exception:
-                pass
+                return {"text": "", "note": "no_output_file"}, 200
+
+            segments, info = model.transcribe(wav_path, beam_size=5, language=language)
+            text = "".join(seg.text for seg in segments).strip()
+            return {"text": text, "language": getattr(info, 'language', language), "duration": getattr(info, 'duration', 0)}
+        finally:
+            for p in (in_path, wav_path):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
     return app

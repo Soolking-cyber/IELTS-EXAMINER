@@ -936,7 +936,10 @@ export class GdmLiveAudio extends LitElement {
       if (this.speakCancel) break;
       this.addExaminer(line);
       const before = this.audioEvents;
-      try { this.session.sendRealtimeInput({ text: line }); } catch {}
+      // Use sendClientContent for text turns and mark turnComplete to trigger generation
+      try {
+        (this.session as any).sendClientContent?.({ turns: [line], turnComplete: true });
+      } catch {}
       // Wait until we receive at least one audio chunk or a short timeout
       const start = performance.now();
       while (this.audioEvents === before && performance.now() - start < 2000) {
@@ -1323,7 +1326,7 @@ export class GdmLiveAudio extends LitElement {
           if (!ev.data || ev.data.size === 0) return;
           this.transcribeChunk(ev.data);
         };
-        try { this.mediaRecorder.start(2000); } catch {}
+        try { this.mediaRecorder.start(5000); } catch {}
       }
 
       this.isRecording = true;
