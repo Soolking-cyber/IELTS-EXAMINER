@@ -768,6 +768,7 @@ export class GdmLiveAudio extends LitElement {
     });
 
     this.outputNode.connect(this.outputAudioContext.destination);
+    try { this.outputNode.gain.value = 1.0; } catch {}
 
     this.initSession();
   }
