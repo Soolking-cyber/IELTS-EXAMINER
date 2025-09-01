@@ -916,7 +916,7 @@ export class GdmLiveAudio extends LitElement {
         lines.push(`Question ${qi + 1}: ${q}`);
       });
     });
-    await this.speakLinesWithGemini(lines);
+    await this.speakLinesWithTTS(lines);
   }
 
   private async speakPart3() {
@@ -924,7 +924,7 @@ export class GdmLiveAudio extends LitElement {
     const lines: string[] = [];
     lines.push("Now Part 3. Let's discuss some broader questions.");
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
-    await this.speakLinesWithGemini(lines);
+    await this.speakLinesWithTTS(lines);
   }
 
   private async speakLinesWithGemini(lines: string[]) {
@@ -936,10 +936,12 @@ export class GdmLiveAudio extends LitElement {
       if (this.speakCancel) break;
       this.addExaminer(line);
       const before = this.audioEvents;
-      // Use sendClientContent for text turns and mark turnComplete to trigger generation
+      // Send text message to Gemini Live session
       try {
-        (this.session as any).sendClientContent?.({ turns: [line], turnComplete: true });
-      } catch {}
+        await this.session.send({ text: line });
+      } catch (e) {
+        console.error('Failed to send message to Gemini:', e);
+      }
       // Wait until we receive at least one audio chunk or a short timeout
       const start = performance.now();
       while (this.audioEvents === before && performance.now() - start < 2000) {
@@ -950,6 +952,52 @@ export class GdmLiveAudio extends LitElement {
       await new Promise((r) => setTimeout(r, 150));
     }
     this.speaking = false;
+  }
+
+  private async speakLinesWithTTS(lines: string[]) {
+    this.speaking = true;
+    this.speakCancel = false;
+    for (const line of lines) {
+      if (this.speakCancel) break;
+      this.addExaminer(line);
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: line }),
+        });
+        if (!res.ok) {
+          try { console.warn('TTS error', res.status, await res.text()); } catch {}
+          continue;
+        }
+        const data = await res.json();
+        const b64 = data.audio || data.wav || data.data;
+        const mime = data.mimeType || data.mimetype || 'audio/wav';
+        if (!b64) continue;
+        await this.playTtsBase64(b64, mime);
+      } catch (e) {
+        console.warn('TTS fetch failed', e);
+      }
+      if (this.speakCancel) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    this.speaking = false;
+  }
+
+  private async playTtsBase64(b64: string, mime: string) {
+    const src = `data:${mime};base64,${b64}`;
+    const audio = new Audio();
+    audio.src = src;
+    audio.crossOrigin = 'anonymous';
+    try { await this.outputAudioContext.resume(); } catch {}
+    const source = this.outputAudioContext.createMediaElementSource(audio);
+    source.connect(this.outputNode);
+    await new Promise<void>((resolve) => {
+      const onEnd = () => { audio.removeEventListener('ended', onEnd); resolve(); };
+      audio.addEventListener('ended', onEnd);
+      audio.play().catch(() => resolve());
+    });
+    try { source.disconnect(); } catch {}
   }
 
   private updateStatus(msg: string) {
@@ -1436,19 +1484,22 @@ export class GdmLiveAudio extends LitElement {
     if (this.currentTranscript.length === 0) return;
 
     this.isScoring = true;
-    this.updateStatus('Test complete. Generating your score and feedback...');
+    this.updateStatus('Test complete. Generating score + feedback...');
 
     const fullTranscript = this.currentTranscript
       .map((entry) => `${entry.speaker}: ${entry.text}`)
       .join('\n');
 
     try {
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Based on the following IELTS speaking test transcript, provide an overall band score and detailed feedback on fluency, lexical resource, grammar, and pronunciation. Format the output as a string starting with "Overall Score: [score]" followed by a newline, and then the detailed feedback. Transcript:\n\n${fullTranscript}`,
+      const prompt = `Based on the following IELTS speaking test transcript, provide an overall band score and detailed feedback on fluency, lexical resource, grammar, and pronunciation. Format the output as a string starting with "Overall Score: [score]" followed by a newline, and then the detailed feedback. Transcript:\n\n${fullTranscript}`;
+      const res = await fetch('/api/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] }),
       });
-
-      const resultText = response.text;
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const resultText = (data.text || '').trim();
       const scoreMatch = resultText.match(/Overall Score: ([\d.]+)/);
       const score = scoreMatch ? scoreMatch[1] : 'N/A';
       const feedback = resultText.replace(/Overall Score: [\d.]+\n?/, '');
