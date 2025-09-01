@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "installCommand": "npm ci",
+  "framework": "vite",
+  "env": {
+    "STT_URL": "https://shanazar15071994--ielts-stt-modal-fastapi-app.modal.run"
+  }
+}

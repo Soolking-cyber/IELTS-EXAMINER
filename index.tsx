@@ -15,45 +15,15 @@ import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
 import './visual-3d';
+import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
 
-// Firebase Imports
-import {initializeApp} from 'firebase/app';
-import {
-  getAuth,
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signOut,
-  User,
-} from 'firebase/auth';
-import {
-  getFirestore,
-  doc,
-  setDoc,
-  getDoc,
-  collection,
-  addDoc,
-  getDocs,
-  query,
-  orderBy,
-  serverTimestamp,
-} from 'firebase/firestore';
-
-// Your web app's Firebase configuration
-const firebaseConfig = {
-  apiKey: 'AIzaSyDLkOMHGGrxwtHA9lWZeY5yLFpRTsZeqdU',
-  authDomain: 'ielts-8334c.firebaseapp.com',
-  projectId: 'ielts-8334c',
-  storageBucket: 'ielts-8334c.firebasestorage.app',
-  messagingSenderId: '738799923949',
-  appId: '1:738799923949:web:2e8251461ac7f3160552e4',
-};
-
-// A flag to check if firebase config is valid
-const isFirebaseConfigured =
-  firebaseConfig.apiKey &&
-  firebaseConfig.apiKey !== 'undefined' &&
-  firebaseConfig.projectId;
+// Supabase configuration
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const supabase =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
 
 interface TranscriptEntry {
   speaker: 'user' | 'examiner';
@@ -94,24 +64,27 @@ export class GdmLiveAudio extends LitElement {
   @state() isHistoryVisible = false;
   @state() selectedTest: TestRecord | null = null;
   @state() isScoring = false;
+  // Speech-to-text (browser)
+  private recognition: any = null;
+  private sttRestartOnEnd = false;
+  private lastSttRestartAt = 0;
+  // Supabase-driven question sets
+  @state() part1Set: { topic: string; questions: string[] }[] = [];
+  @state() part3Set: string[] = [];
+  private part2CueId: string | null = null;
+  private speaking = false;
+  private speakCancel = false;
 
-  // Authentication state
-  @state() private user: User | null = null;
+  // Authentication state (Supabase)
+  @state() private user: SupabaseUser | null = null;
   @state() private authInitialized = false;
-  @state() private firebaseAvailable = isFirebaseConfigured;
-  @state() private isGuestMode = false;
-
-  // Firebase services
-  private app;
-  private auth;
-  private db;
 
   private timerInterval: any = null;
   private preparationTimerInterval: any = null;
   private readonly partDurations = {part1: 300, part2: 120, part3: 300}; // in seconds
 
   private client: GoogleGenAI;
-  private session: Session;
+  private session: Session | null = null;
   // FIX: Property 'webkitAudioContext' does not exist on type 'Window & typeof globalThis'. Cast to any to allow fallback.
   private inputAudioContext = new (window.AudioContext ||
     (window as any).webkitAudioContext)({sampleRate: 16000});
@@ -123,7 +96,8 @@ export class GdmLiveAudio extends LitElement {
   private nextStartTime = 0;
   private mediaStream: MediaStream;
   private sourceNode: AudioBufferSourceNode;
-  private scriptProcessorNode: ScriptProcessorNode;
+  private mediaRecorder: MediaRecorder | null = null;
+  // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
 
@@ -146,6 +120,34 @@ export class GdmLiveAudio extends LitElement {
       box-sizing: border-box;
     }
 
+    /* Ensure the visuals canvas always fills the viewport behind UI */
+    gdm-live-audio-visuals-3d {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* Fullscreen cue card overlay for Part 2 prep */
+    #cue-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+    }
+    #prep-countdown {
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-size: clamp(1.2rem, 6vw, 2rem);
+      font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace;
+    }
+
     .container {
       display: flex;
       flex-direction: column;
@@ -155,6 +157,7 @@ export class GdmLiveAudio extends LitElement {
       align-items: center;
       justify-content: space-between;
       position: relative;
+      z-index: 2; /* Keep UI above visuals */
     }
 
     .main-content-area {
@@ -174,16 +177,94 @@ export class GdmLiveAudio extends LitElement {
     }
 
     #cue-card {
-      width: 100%;
-      max-width: 500px;
-      color: white;
-      padding: 24px;
-      z-index: 5;
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 0px) + 20px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: calc(100% - 40px);
+      max-width: 560px;
+      color: #111;
+      background: #ffffff;
+      border: 1px solid #e5e5e5;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      padding: 14px 18px;
+      z-index: 6;
       font-size: 18px;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      text-align: center;
+      line-height: 1.4;
+      white-space: normal;
+      text-align: left;
+      border-radius: 12px;
+      max-height: 45vh;
+      overflow: auto;
     }
+
+    /* Centered variant inside overlay */
+    #cue-overlay #cue-card {
+      position: static;
+      transform: none;
+      width: min(92vw, 640px);
+      max-height: 70vh;
+    }
+
+    #cue-card .card-title {
+      margin: 0 0 4px 0;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #555;
+      font-weight: 700;
+    }
+
+    #cue-card .prompt {
+      margin: 2px 0 8px 0;
+      font-weight: 700;
+      color: #111;
+      white-space: normal;
+    }
+
+    #cue-card .label {
+      margin-top: 6px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    #cue-card ul {
+      margin: 4px 0 0 1rem;
+      padding: 0;
+    }
+
+    #cue-card li {
+      margin: 2px 0;
+    }
+
+    #cue-card .note {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #666;
+    }
+
+    /* Part 1/3 prompt card (top fixed) */
+    #prompt-card {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 0px) + 16px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: calc(100% - 40px);
+      max-width: 680px;
+      background: #ffffff;
+      color: #111;
+      border: 1px solid #e5e5e5;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      border-radius: 12px;
+      padding: 12px 16px;
+      z-index: 6;
+      max-height: 42vh;
+      overflow: auto;
+    }
+    #prompt-card h3 { margin: 0 0 6px 0; font-size: 16px; }
+    #prompt-card .topic { margin: 8px 0 2px; font-weight: 700; }
+    #prompt-card ol, #prompt-card ul { margin: 6px 0 0 1.2rem; }
+    #prompt-card li { margin: 2px 0; }
 
     #cue-card[hidden] {
       display: none;
@@ -533,97 +614,57 @@ export class GdmLiveAudio extends LitElement {
         font-size: 16px;
       }
       #cue-card {
-        padding: 32px;
+        padding: 20px 24px;
         font-size: 20px;
+        top: 24px; /* keep card near top to avoid circle */
       }
     }
   `;
 
   constructor() {
     super();
-    if (this.firebaseAvailable) {
-      // Initialize Firebase
-      this.app = initializeApp(firebaseConfig);
-      this.auth = getAuth(this.app);
-      this.db = getFirestore(this.app);
-    }
   }
 
   connectedCallback() {
     super.connectedCallback();
-    if (this.firebaseAvailable) {
-      this.listenForAuthChanges();
-    } else {
-      console.warn(
-        'Firebase configuration is missing. Running in Guest Mode.',
-      );
-      this.authInitialized = true;
-      this.initClient();
-    }
+    this.setupAuth();
+    this.loadLocalHistory();
   }
 
-  private listenForAuthChanges() {
-    onAuthStateChanged(this.auth, async (user) => {
-      if (user) {
-        this.user = user;
-        const userDocRef = doc(this.db, 'users', user.uid);
-        const userDocSnap = await getDoc(userDocRef);
-        if (!userDocSnap.exists()) {
-          await setDoc(userDocRef, {
-            displayName: user.displayName,
-            email: user.email,
-            createdAt: serverTimestamp(),
-          });
-        }
-        this.initClient();
-        this.loadHistory();
-      } else {
-        this.user = null;
-        this.isGuestMode = false;
-        this.testHistory = []; // Clear history on logout
-      }
+  private async setupAuth() {
+    if (!supabase) {
+      this.updateError('Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.');
       this.authInitialized = true;
+      return;
+    }
+    const { data } = await supabase.auth.getSession();
+    this.user = data.session?.user ?? null;
+    this.authInitialized = true;
+    this.initClient();
+    supabase.auth.onAuthStateChange((_event, session) => {
+      this.user = session?.user ?? null;
+      this.requestUpdate();
     });
   }
 
   private async signInWithGoogle() {
-    if (!this.firebaseAvailable) return;
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(this.auth, provider);
-    } catch (error) {
-      console.error('Authentication Error: ', error);
-      this.updateError('Failed to sign in. Please try again.');
-    }
+    if (!supabase) return;
+    const redirectTo = window.location.origin;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
+    if (error) this.updateError('Failed to sign in with Google.');
   }
 
   private async signOutUser() {
-    if (!this.firebaseAvailable) return;
-    await signOut(this.auth);
+    if (!supabase) return;
+    await supabase.auth.signOut();
   }
 
-  private signInAsGuest() {
-    this.isGuestMode = true;
-    this.initClient();
-  }
+  // Guest mode removed
 
-  private async loadHistory() {
-    if (!this.user || !this.firebaseAvailable) return;
-    try {
-      const historyCollection = collection(
-        this.db,
-        'users',
-        this.user.uid,
-        'testHistory',
-      );
-      const q = query(historyCollection, orderBy('id', 'desc'));
-      const querySnapshot = await getDocs(q);
-      this.testHistory = querySnapshot.docs.map((d) => d.data() as TestRecord);
-    } catch (e) {
-      console.error('Error loading history: ', e);
-      this.updateError('Could not load test history.');
-    }
-  }
+  // Remote history removed; using local history
 
   private initAudio() {
     this.nextStartTime = this.outputAudioContext.currentTime;
@@ -652,24 +693,17 @@ export class GdmLiveAudio extends LitElement {
   private async initSession() {
     if (!this.client) return;
     const model = 'gemini-2.5-flash-preview-native-audio-dialog';
-
     try {
       this.session = await this.client.live.connect({
-        model: model,
+        model,
         callbacks: {
           onopen: () => {
-            this.updateStatus('Session opened. Select a part to begin.');
+            this.updateStatus('Ready. Select a part to begin.');
           },
           onmessage: async (message: LiveServerMessage) => {
-            const audio =
-              message.serverContent?.modelTurn?.parts[0]?.inlineData;
-
+            const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
             if (audio) {
-              this.nextStartTime = Math.max(
-                this.nextStartTime,
-                this.outputAudioContext.currentTime,
-              );
-
+              this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
               const audioBuffer = await decodeAudioData(
                 decode(audio.data),
                 this.outputAudioContext,
@@ -682,47 +716,14 @@ export class GdmLiveAudio extends LitElement {
               source.addEventListener('ended', () => {
                 this.sources.delete(source);
               });
-
               source.start(this.nextStartTime);
               this.nextStartTime = this.nextStartTime + audioBuffer.duration;
               this.sources.add(source);
             }
-
-            const modelText = message.serverContent?.modelTurn?.parts[0]?.text;
-            if (modelText) {
-              this.currentTranscript = [
-                ...this.currentTranscript,
-                {speaker: 'examiner', text: modelText},
-              ];
-              // Check if the AI has finished giving Part 2 instructions
-              if (
-                this.selectedPart === 'part2' &&
-                !this.isPreparing &&
-                !this.isRecording &&
-                modelText.toLowerCase().includes('starts now')
-              ) {
-                this.startPreparationTimer();
-              }
-            }
-            
-            // FIX: The property for speech recognition results is 'speechRecognitionResults' (plural) and it is an array.
-            // FIX: User speech recognition results are nested under the 'userTurn' property, mirroring the 'modelTurn' structure for model responses.
-            const userText =
-              message.serverContent?.userTurn?.speechRecognitionResults?.[0]?.text;
-            const isFinal =
-              message.serverContent?.userTurn?.speechRecognitionResults?.[0]?.isFinal;
-
-            if (userText && isFinal) {
-              this.currentTranscript = [
-                ...this.currentTranscript,
-                {speaker: 'user', text: userText},
-              ];
-            }
-
             const interrupted = message.serverContent?.interrupted;
             if (interrupted) {
               for (const source of this.sources.values()) {
-                source.stop();
+                try { source.stop(); } catch {}
                 this.sources.delete(source);
               }
               this.nextStartTime = 0;
@@ -737,42 +738,121 @@ export class GdmLiveAudio extends LitElement {
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
-          },
-          systemInstruction: `You are a professional IELTS examiner. Your role is to conduct a simulated IELTS speaking test. Adhere strictly to the official test format, maintaining a professional yet encouraging tone. Do not deviate from the script for each part's instructions.
-
-**General Rules:**
-- When you are given a prompt like "Let's start IELTS Speaking Part X", you must initiate that part of the test according to the instructions below.
-- Do not add any conversational filler that is not part of the standard IELTS script.
-
-**Part 1 Procedure:**
-- **Trigger:** The user prompt "Let's start IELTS Speaking Part 1."
-- **Your Script:**
-  1. Say: "Good morning. My name is [Your Examiner Name]. Welcome to the speaking portion of the IELTS examination. Can you tell me your full name, please? ... And what should I call you? ... Thank you. In this first part, I'd like to ask you some questions about yourself."
-  2. To ensure variety, you must select 2-3 different topics for this part. For each new test, you must choose topics you haven't used recently. Draw from the following extensive list: Work, Studies, Hometown, Home, Accommodation, Art, Birthdays, Childhood, Clothes, Computers, Daily Routine, Dictionaries, Evenings, Family and Friends, Flowers, Food, Going out, Hobbies, Holidays, Internet, Leisure time, Music, Movies, Neighbors, Newspapers, Pets, Reading, Shopping, Sport, TV, Transportation, Travel, Weather, Names, Sleep, Public Transportation, Concentration, Weekends, Emails, Social Media, Gifts, Colors, Dreams, Being in a hurry, Puzzles, Sitting down, Noise, Sharing, Teachers, Science, Apps, Websites, Singing, History, Robots.
-  3. Ask 3-4 questions for each topic.
-  4. Conclude Part 1 by saying: "Thank you. That is the end of Part 1."
-
-**Part 2 Procedure:**
-- **Trigger:** You will receive a user prompt containing the cue card topic, like this: "The user is starting Part 2. Please give the standard Part 2 instructions, and then read the following cue card topic verbatim: '[The Cue Card Topic]'".
-- **Your Script:**
-  1. Say: "Now, in this second part, I am going to give you a topic, and I would like you to talk about it for one to two minutes. Before you talk, you will have one minute to think about what you are going to say. You can make notes if you wish. Do you understand?"
-  2. After a brief pause, read the topic you were given verbatim.
-  3. After reading the topic, say: "You have one minute to prepare your answer. Your preparation time starts now."
-
-**Part 3 Procedure:**
-- **Trigger:** The user prompt "Let's start IELTS Speaking Part 3. The topic for Part 2 was: '[The Part 2 Topic]'".
-- **Your Script:**
-  1. Say: "We've been talking about [general theme from Part 2 topic], and I'd like to discuss with you one or two more general questions related to this. First, let's consider..."
-  2. Ask 4-6 abstract, discussion-style questions related to the Part 2 topic. You can ask follow-up questions to probe deeper.
-  3. Conclude the entire test by saying: "Thank you very much. That is the end of the speaking test."`,
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Orus' } } },
+          systemInstruction:
+            'You are an IELTS examiner voice. When you receive text input, read it aloud verbatim, clearly and neutrally, and do not add any extra words or commentary.',
         },
       });
     } catch (e) {
       console.error(e);
-      this.updateError(`Failed to initialize session: ${e.message}`);
+      this.updateError(`Failed to initialize audio session: ${e.message}`);
     }
+  }
+
+  private shuffle<T>(arr: T[]): T[] {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  private async loadPart1Questions() {
+    if (!supabase) return;
+    this.updateStatus('Loading Part 1 questions...');
+    this.part1Set = [];
+    // fetch topics (sample up to 1000 rows then dedupe topics client-side)
+    const { data: topicRows, error: tErr } = await supabase
+      .from('ielts_part1_questions')
+      .select('topic')
+      .limit(1000);
+    if (tErr) {
+      this.updateError('Failed to load topics');
+      return;
+    }
+    const topics = Array.from(new Set((topicRows || []).map((r: any) => r.topic).filter(Boolean)));
+    if (topics.length === 0) {
+      this.updateError('No topics available');
+      return;
+    }
+    const chosenTopics = this.shuffle(topics).slice(0, 3);
+    // decide total questions 10-12 split across 3 topics
+    const total = 10 + Math.floor(Math.random() * 3); // 10,11,12
+    const base = Math.floor(total / 3);
+    const remainder = total % 3;
+    const perTopic = [base, base, base];
+    for (let i = 0; i < remainder; i++) perTopic[i]++;
+    const result: { topic: string; questions: string[] }[] = [];
+    for (let i = 0; i < chosenTopics.length; i++) {
+      const topic = chosenTopics[i];
+      const { data: qRows, error: qErr } = await supabase
+        .from('ielts_part1_questions')
+        .select('question')
+        .eq('topic', topic)
+        .limit(100);
+      if (qErr || !qRows || qRows.length === 0) continue;
+      const picked = this.shuffle(qRows.map((r: any) => r.question)).slice(0, perTopic[i]);
+      result.push({ topic, questions: picked });
+    }
+    this.part1Set = result;
+    this.updateStatus('Part 1 questions ready.');
+  }
+
+  private addExaminer(text: string) {
+    if (!text) return;
+    this.currentTranscript = [
+      ...this.currentTranscript,
+      { speaker: 'examiner', text },
+    ];
+  }
+
+  private async ensureSession() {
+    if (!this.session) await this.initSession();
+  }
+
+  private cancelSpeaking() {
+    this.speakCancel = true;
+    for (const source of this.sources.values()) {
+      try { source.stop(); } catch {}
+      this.sources.delete(source);
+    }
+    this.nextStartTime = 0;
+  }
+
+  private async speakPart1() {
+    if (!this.part1Set || this.part1Set.length === 0) return;
+    const lines: string[] = [];
+    lines.push("Let's begin Part 1. I will ask you some questions about yourself.");
+    this.part1Set.forEach((group, gi) => {
+      lines.push(`Topic ${gi + 1}: ${group.topic}.`);
+      group.questions.forEach((q, qi) => {
+        lines.push(`Question ${qi + 1}: ${q}`);
+      });
+    });
+    await this.speakLinesWithGemini(lines);
+  }
+
+  private async speakPart3() {
+    if (!this.part3Set || this.part3Set.length === 0) return;
+    const lines: string[] = [];
+    lines.push("Now Part 3. Let's discuss some broader questions.");
+    this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
+    await this.speakLinesWithGemini(lines);
+  }
+
+  private async speakLinesWithGemini(lines: string[]) {
+    await this.ensureSession();
+    if (!this.session) return;
+    this.speaking = true;
+    this.speakCancel = false;
+    for (const line of lines) {
+      if (this.speakCancel) break;
+      this.addExaminer(line);
+      try { this.session.sendRealtimeInput({ text: line }); } catch {}
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    this.speaking = false;
   }
 
   private updateStatus(msg: string) {
@@ -785,12 +865,118 @@ export class GdmLiveAudio extends LitElement {
     this.status = '';
   }
 
-  private selectPart(part: 'part1' | 'part2' | 'part3') {
+  // --- Local history ---
+  private saveLocalTest(score?: string, feedback?: string) {
+    if (this.currentTranscript.length === 0) return;
+    const record: TestRecord = {
+      id: Date.now(),
+      name: `IELTS Test ${this.testHistory.length + 1}`,
+      date: new Date().toLocaleDateString(),
+      transcript: this.currentTranscript,
+      score: score || 'N/A',
+      feedback: feedback || '',
+    };
+    const key = 'ieltsTestHistory';
+    try {
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      existing.unshift(record);
+      localStorage.setItem(key, JSON.stringify(existing));
+      this.testHistory = existing;
+    } catch (e) {
+      console.warn('Local history save failed', e);
+    }
+  }
+
+  private loadLocalHistory() {
+    try {
+      const key = 'ieltsTestHistory';
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      if (Array.isArray(existing)) this.testHistory = existing as TestRecord[];
+    } catch {
+      // ignore
+    }
+  }
+
+  // --- Browser Speech-to-Text ---
+  private startSpeechRecognition() {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('SpeechRecognition API not available');
+      return;
+    }
+    if (!this.recognition) {
+      this.recognition = new SpeechRecognition();
+      this.recognition.continuous = true;
+      this.recognition.interimResults = true;
+      this.recognition.lang = 'en-US';
+      this.recognition.onresult = (event: any) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const text = res[0]?.transcript?.trim();
+          if (!text) continue;
+          if (res.isFinal) {
+            this.currentTranscript = [
+              ...this.currentTranscript,
+              { speaker: 'user', text },
+            ];
+          }
+        }
+      };
+      this.recognition.onerror = (e: any) => {
+        const err = e?.error || e;
+        const transient = err === 'no-speech' || err === 'network' || err === 'aborted';
+        if (!transient) {
+          console.warn('STT error', err);
+        }
+        // Throttle restarts to avoid loops
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        if (this.isRecording && transient && now - this.lastSttRestartAt > 1000) {
+          this.lastSttRestartAt = now;
+          try { this.recognition.stop(); } catch {}
+          setTimeout(() => {
+            if (this.isRecording) {
+              try { this.recognition.start(); } catch {}
+            }
+          }, 300);
+        }
+      };
+      this.recognition.onend = () => {
+        if (this.isRecording) {
+          try { this.recognition.start(); } catch {}
+        }
+      };
+    }
+    try { this.recognition.start(); } catch {}
+  }
+
+  private stopSpeechRecognition() {
+    try { this.recognition && this.recognition.stop(); } catch {}
+  }
+
+  private async selectPart(part: 'part1' | 'part2' | 'part3') {
     if (this.isRecording || this.isPreparing) return;
     this.selectedPart = part;
 
     if (part === 'part2') {
       this.generateAndSetPart2Topic();
+    } else if (part === 'part1') {
+      await this.loadPart1Questions();
+      const duration = this.partDurations[part];
+      this.timer = duration;
+      this.updateTimerDisplay();
+      this.part2Topic = '';
+      await this.startRecording();
+      this.speakPart1();
+    } else if (part === 'part3') {
+      await this.loadPart3Questions();
+      const duration = this.partDurations[part];
+      this.timer = duration;
+      this.updateTimerDisplay();
+      if (!this.part2Topic) {
+        // still allow Part 3 with generic questions
+      }
+      await this.startRecording();
+      this.speakPart3();
     } else {
       const duration = this.partDurations[part];
       this.timer = duration;
@@ -799,36 +985,73 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
+  private async loadPart3Questions() {
+    if (!supabase) return;
+    this.updateStatus('Loading Part 3 questions...');
+    const questions: string[] = [];
+    try {
+      let related: any[] = [];
+      if (this.part2CueId) {
+        const { data: rel } = await supabase
+          .from('ielts_part3_questions')
+          .select('question')
+          .eq('part2_id', this.part2CueId)
+          .limit(50);
+        related = rel || [];
+      }
+      const { data: unrel } = await supabase
+        .from('ielts_part3_questions')
+        .select('question, part2_id')
+        .limit(200);
+      const poolUnrel = (unrel || []).filter((r: any) => !this.part2CueId || r.part2_id !== this.part2CueId);
+      const pickRelated = Math.min(3, related.length);
+      const pickUnrel = 5 - Math.min(5, pickRelated + 2) + 2; // aim for 4-5 total
+      const relQs = this.shuffle(related.map((r: any) => r.question)).slice(0, pickRelated);
+      const unrelQs = this.shuffle(poolUnrel.map((r: any) => r.question)).slice(0, Math.max(2, 4 - relQs.length));
+      questions.push(...relQs, ...unrelQs);
+      // ensure 4-5
+      if (questions.length < 4 && poolUnrel.length > questions.length) {
+        questions.push(...this.shuffle(poolUnrel.map((r: any) => r.question)).slice(0, 4 - questions.length));
+      }
+      if (questions.length > 5) questions.length = 5;
+      this.part3Set = questions;
+      this.updateStatus('Part 3 questions ready.');
+    } catch (e) {
+      this.updateError('Failed to load Part 3 questions.');
+      console.error(e);
+    }
+  }
+
   private async generateAndSetPart2Topic() {
     this.part2Topic = '';
     this.part2TopicLoading = true;
     this.part2Completed = false;
-    this.updateStatus('Generating IELTS Part 2 topic...');
+    this.updateStatus('Loading IELTS Part 2 cue card...');
 
     try {
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents:
-          'Generate a random IELTS speaking Part 2 cue card topic. The response should be a string containing the main topic, followed by "You should say:", and then three or four bullet points, each on a new line starting with a hyphen.',
-      });
-
-      if (!this.part2TopicLoading) {
-        return; // Component was reset while generating.
-      }
-
-      this.part2Topic = response.text;
-      this.updateStatus(
-        'Listen to the examiner for your topic and instructions.',
-      );
-
-      // Trigger the AI to read the instructions and the topic.
-      // The onmessage handler will listen for the cue to start the prep timer.
-      this.session.sendRealtimeInput({
-        text: `The user is starting Part 2. Please give the standard Part 2 instructions, and then read the following cue card topic verbatim: "${this.part2Topic}"`,
-      });
+      if (!supabase) throw new Error('Supabase not configured');
+      // Get total count
+      const { count, error: cErr } = await supabase
+        .from('ielts_part2_cues')
+        .select('id', { count: 'exact', head: true });
+      if (cErr || !count || count <= 0) throw new Error('No cue cards found');
+      const offset = Math.floor(Math.random() * count);
+      const { data, error } = await supabase
+        .from('ielts_part2_cues')
+        .select('id, title, bullet_a, bullet_b, bullet_c, bullet_d')
+        .order('id', { ascending: true })
+        .range(offset, offset);
+      if (error || !data || data.length === 0) throw new Error('Failed to fetch cue card');
+      const cue = data[0] as any;
+      this.part2CueId = cue.id;
+      const topic = `${cue.title}\nYou should say:\n- ${cue.bullet_a}\n- ${cue.bullet_b}\n- ${cue.bullet_c}\n- ${cue.bullet_d}`;
+      if (!this.part2TopicLoading) return;
+      this.part2Topic = topic;
+      this.updateStatus('Cue card ready. 1 minute to prepare.');
+      this.startPreparationTimer();
     } catch (e) {
       if (this.part2TopicLoading) {
-        this.updateError('Failed to generate topic. Please try again.');
+        this.updateError('Failed to load cue card.');
         console.error(e);
       }
     } finally {
@@ -880,16 +1103,20 @@ export class GdmLiveAudio extends LitElement {
     this.isPreparing = true;
     this.preparationTimer = 60;
     this.updatePreparationTimerDisplay();
-    this.updateStatus(
-      'Prepare your answer. Recording will start automatically.',
-    );
+    this.updateStatus('Cue card open. 1 minute to prepare.');
 
     this.preparationTimerInterval = setInterval(() => {
       this.preparationTimer -= 1;
       this.updatePreparationTimerDisplay();
       if (this.preparationTimer <= 0) {
         this.stopPreparationTimer();
-        this.startRecording(); // Automatically start recording
+        // Start the actual 2-minute talk with STT
+        // Force-set the talk timer to 2:00 for Part 2
+        if (this.selectedPart === 'part2') {
+          this.timer = 120;
+          this.updateTimerDisplay();
+        }
+        this.startRecording();
       }
     }, 1000);
   }
@@ -912,15 +1139,11 @@ export class GdmLiveAudio extends LitElement {
     this.updateTimerDisplay();
 
     if (this.selectedPart === 'part1') {
-      this.initialPrompt = "Let's start IELTS Speaking Part 1.";
+      this.initialPrompt = null;
     } else if (this.selectedPart === 'part3') {
-      if (!this.part2Topic) {
-        this.updateError(
-          'Cannot start Part 3 without a Part 2 topic. Please complete Part 2 first.',
-        );
-        return;
-      }
-      this.initialPrompt = `Let's start IELTS Speaking Part 3. The topic for Part 2 was: "${this.part2Topic}"`;
+      this.initialPrompt = this.part2Topic
+        ? `Let's start IELTS Speaking Part 3. The topic for Part 2 was: "${this.part2Topic}"`
+        : `Let's start IELTS Speaking Part 3.`;
     } else {
       this.initialPrompt = null;
     }
@@ -936,39 +1159,24 @@ export class GdmLiveAudio extends LitElement {
 
       this.updateStatus('Microphone access granted. Starting capture...');
 
-      this.sourceNode = this.inputAudioContext.createMediaStreamSource(
-        this.mediaStream,
-      );
+      this.sourceNode = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
       this.sourceNode.connect(this.inputNode);
 
-      const bufferSize = 256;
-      this.scriptProcessorNode = this.inputAudioContext.createScriptProcessor(
-        bufferSize,
-        1,
-        1,
-      );
-
-      this.scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
-        if (!this.isRecording) return;
-        const inputBuffer = audioProcessingEvent.inputBuffer;
-        const pcmData = inputBuffer.getChannelData(0);
-
-        const payload: {media: Blob; text?: string} = {
-          media: createBlob(pcmData),
+      // Start MediaRecorder to send chunks to server STT (Modal)
+      const mime = (window as any).MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      if ((window as any).MediaRecorder) {
+        this.mediaRecorder = new MediaRecorder(this.mediaStream, { mimeType: mime });
+        this.mediaRecorder.ondataavailable = (ev: BlobEvent) => {
+          if (!ev.data || ev.data.size === 0) return;
+          this.transcribeChunk(ev.data);
         };
-
-        if (this.initialPrompt) {
-          payload.text = this.initialPrompt;
-          this.initialPrompt = null;
-        }
-
-        this.session.sendRealtimeInput(payload);
-      };
-
-      this.sourceNode.connect(this.scriptProcessorNode);
-      this.scriptProcessorNode.connect(this.inputAudioContext.destination);
+        try { this.mediaRecorder.start(2000); } catch {}
+      }
 
       this.isRecording = true;
+      
       this.startTimer();
       this.updateStatus(''); // Clear status during recording
     } catch (err) {
@@ -995,15 +1203,19 @@ export class GdmLiveAudio extends LitElement {
 
     this.updateStatus('Stopping recording...');
     this.stopTimer();
+    this.stopSpeechRecognition();
+    this.cancelSpeaking();
     this.stopPreparationTimer();
     this.isRecording = false;
 
-    if (this.scriptProcessorNode && this.sourceNode && this.inputAudioContext) {
-      this.scriptProcessorNode.disconnect();
-      this.sourceNode.disconnect();
+    if (this.mediaRecorder) {
+      try { this.mediaRecorder.stop(); } catch {}
+      this.mediaRecorder = null;
     }
 
-    this.scriptProcessorNode = null;
+    if (this.sourceNode && this.inputAudioContext) {
+      try { this.sourceNode.disconnect(); } catch {}
+    }
     this.sourceNode = null;
 
     if (this.mediaStream) {
@@ -1018,6 +1230,33 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
+
+
+  private async transcribeChunk(blob: Blob) {
+    const sttUrl = (process.env.STT_URL || '').trim();
+    if (!sttUrl) return; // Not configured
+    try {
+      const fd = new FormData();
+      const file = new File([blob], 'chunk.webm', { type: blob.type || 'audio/webm' });
+      fd.append('audio', file);
+      const qs = new URLSearchParams({ language: 'en' }).toString();
+      const res = await fetch(`${sttUrl.replace(/\/$/, '')}/stt?${qs}`, {
+        method: 'POST',
+        body: fd,
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const text = (json && json.text || '').trim();
+      if (text) {
+        this.currentTranscript = [
+          ...this.currentTranscript,
+          { speaker: 'user', text },
+        ];
+      }
+    } catch (_) {
+      // ignore network errors
+    }
+  }
   private toggleRecording() {
     if (this.isRecording) {
       this.stopRecording();
@@ -1047,6 +1286,7 @@ export class GdmLiveAudio extends LitElement {
       const score = scoreMatch ? scoreMatch[1] : 'N/A';
       const feedback = resultText.replace(/Overall Score: [\d.]+\n?/, '');
 
+      // Save to cloud if signed in
       if (this.user) {
         const newTest: TestRecord = {
           id: Date.now(),
@@ -1056,38 +1296,15 @@ export class GdmLiveAudio extends LitElement {
           score,
           feedback,
         };
-        await addDoc(
-          collection(this.db, 'users', this.user.uid, 'testHistory'),
-          newTest,
-        );
-        this.testHistory = [newTest, ...this.testHistory];
-        this.updateStatus(
-          `Test saved! Your score is ${score}. Select a part to begin a new test.`,
-        );
-      } else {
-        this.updateStatus(
-          `Test complete! Your score is ${score}. Scores are not saved in Guest Mode.`,
-        );
       }
+      // Save locally
+      this.saveLocalTest(score, feedback);
+      this.updateStatus(`Test complete! Your score is ${score}.`);
     } catch (e) {
       this.updateError('Could not generate score. Test saved without score.');
       console.error('Scoring error:', e);
-      if (this.user) {
-        const newTest: TestRecord = {
-          id: Date.now(),
-          name: `IELTS Test ${this.testHistory.length + 1}`,
-          date: new Date().toLocaleDateString(),
-          transcript: this.currentTranscript,
-          score: 'Error',
-          feedback: 'Could not generate feedback.',
-        };
-
-        await addDoc(
-          collection(this.db, 'users', this.user.uid, 'testHistory'),
-          newTest,
-        );
-        this.testHistory = [newTest, ...this.testHistory];
-      }
+      // Save locally even if scoring failed
+      this.saveLocalTest('N/A', '');
     } finally {
       this.isScoring = false;
       this.currentTranscript = [];
@@ -1106,10 +1323,14 @@ export class GdmLiveAudio extends LitElement {
     this.stopRecording();
     this.stopTimer();
     this.stopPreparationTimer();
+    this.cancelSpeaking();
     this.selectedPart = null;
     this.timer = 0;
     this.timerDisplay = '05:00';
     this.part2Topic = '';
+    this.part1Set = [];
+    this.part3Set = [];
+    this.part2CueId = null;
     this.part1Completed = false;
     this.part2Completed = false;
     this.part3Completed = false;
@@ -1202,12 +1423,9 @@ export class GdmLiveAudio extends LitElement {
       <div class="login-container">
         <div class="login-box">
           <h1>IELTS Speaking Practice</h1>
-          <p>Log in to start your practice test and save your progress.</p>
+          <p>Sign in with Google to start your practice test.</p>
           <button id="google-signin" @click=${this.signInWithGoogle}>
             Sign in with Google
-          </button>
-          <button id="guest-signin" @click=${this.signInAsGuest}>
-            Continue as Guest
           </button>
         </div>
       </div>
@@ -1215,16 +1433,20 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private renderApp() {
-    const isCueCardActive = this.selectedPart === 'part2' && !this.isRecording;
+    const showOverlay =
+      this.selectedPart === 'part2' && (this.part2TopicLoading || this.isPreparing);
+    const showPrompt = false;
     return html`
       ${this.user ? this.renderHistoryPanel() : ''}
       <div class="container">
         <div class="main-content-area">
-          <div
-            id="cue-card"
-            ?hidden=${!isCueCardActive}>
-            ${this.part2TopicLoading ? 'Generating topic...' : this.part2Topic}
-          </div>
+          ${showPrompt
+            ? html`<div id="prompt-card">
+                ${this.selectedPart === 'part1'
+                  ? this.renderPart1Card()
+                  : this.renderPart3Card()}
+              </div>`
+            : ''}
         </div>
 
         <div class="bottom-controls">
@@ -1295,29 +1517,92 @@ export class GdmLiveAudio extends LitElement {
           <div id="status">${this.error || this.status}</div>
         </div>
       </div>
-      <div id="timer" ?hidden=${isCueCardActive}>
+      <div id="timer" ?hidden=${showOverlay}>
         ${this.isRecording || this.isPreparing
           ? this.isPreparing
             ? this.preparationTimerDisplay
             : this.timerDisplay
           : ''}
       </div>
+      ${showOverlay
+        ? html`<div id="cue-overlay">
+            <div id="cue-card">
+              ${this.part2TopicLoading ? 'Generating topic...' : this.renderCueCard()}
+            </div>
+            <div id="prep-countdown">${this.preparationTimerDisplay}</div>
+          </div>`
+        : ''}
       <gdm-live-audio-visuals-3d
         .inputNode=${this.inputNode}
         .outputNode=${this.outputNode}></gdm-live-audio-visuals-3d>
     `;
   }
 
+  private renderPart1Card() {
+    return html`
+      <h3>Part 1 Questions</h3>
+      ${this.part1Set.map(
+        (g) => html`
+          <div class="topic">${g.topic}</div>
+          <ol>
+            ${g.questions.map((q) => html`<li>${q}</li>`)}
+          </ol>
+        `,
+      )}
+    `;
+  }
+
+  private renderPart3Card() {
+    return html`
+      <h3>Part 3 Questions</h3>
+      <ol>
+        ${this.part3Set.map((q) => html`<li>${q}</li>`)}
+      </ol>
+    `;
+  }
+
+  private renderCueCard() {
+    const raw = (this.part2Topic || '').trim();
+    if (!raw) return html``;
+
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    let prompt = '';
+    const bullets: string[] = [];
+    let sawLabel = false;
+    for (const line of lines) {
+      if (!sawLabel && /you should say:?/i.test(line)) {
+        sawLabel = true;
+        continue;
+      }
+      if (!sawLabel) {
+        prompt = prompt ? `${prompt} ${line}` : line;
+      } else {
+        const m = line.match(/^[\-•*—]\s*(.+)$/);
+        if (m) bullets.push(m[1].trim());
+        else if (line) bullets.push(line);
+      }
+    }
+
+    return html`
+      <div class="card-title">Candidate Task Card</div>
+      ${prompt ? html`<div class="prompt">${prompt}</div>` : ''}
+      <div class="label">You should say:</div>
+      <ul>
+        ${bullets.map(item => html`<li>${item}</li>`)}
+      </ul>
+      <div class="note">You will have one minute to think about what you are going to say. You can make some notes to help you if you wish.</div>
+    `;
+  }
+
   render() {
-    // If we're waiting for Firebase auth to initialize, show loading.
-    if (!this.authInitialized && this.firebaseAvailable) {
+    // Wait for auth to initialize
+    if (!this.authInitialized) {
       return this.renderLoading();
     }
-    // If Firebase is set up but user isn't logged in and is not in guest mode, show login page.
-    if (this.firebaseAvailable && !this.user && !this.isGuestMode) {
+    if (!this.user) {
       return this.renderLogin();
     }
-    // Otherwise (user is logged in, OR is in guest mode, OR Firebase is not configured), show the main app.
+    // Otherwise show the main app.
     return this.renderApp();
   }
 }
