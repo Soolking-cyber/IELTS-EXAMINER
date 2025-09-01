@@ -1402,7 +1402,13 @@ export class GdmLiveAudio extends LitElement {
         method: 'POST',
         body: fd,
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        try {
+          const errTxt = await res.text();
+          console.warn('STT proxy error', res.status, errTxt);
+        } catch {}
+        return;
+      }
       const json = await res.json();
       const text = (json && json.text || '').trim();
       if (text) {
