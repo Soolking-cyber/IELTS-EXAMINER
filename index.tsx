@@ -279,6 +279,25 @@ export class GdmLiveAudio extends LitElement {
       z-index: 10;
     }
 
+    .history-toggle {
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .history-toggle button {
+      background: none;
+      border: 1px solid #333;
+      color: white;
+      padding: 8px 14px;
+      border-radius: 99px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .history-toggle button:hover {
+      background: #1a1a1a;
+      border-color: #555;
+    }
+
     .controls {
       display: flex;
       align-items: center;
@@ -641,15 +660,18 @@ export class GdmLiveAudio extends LitElement {
     this.user = data.session?.user ?? null;
     this.authInitialized = true;
     this.initClient();
+    if (this.user) this.loadSupabaseHistory(); else this.loadLocalHistory();
     supabase.auth.onAuthStateChange((_event, session) => {
       this.user = session?.user ?? null;
+      if (this.user) this.loadSupabaseHistory(); else this.loadLocalHistory();
       this.requestUpdate();
     });
   }
 
   private async signInWithGoogle() {
     if (!supabase) return;
-    const redirectTo = window.location.origin;
+    const redirectBase = (process.env.SITE_URL || window.location.origin).replace(/\/$/, '');
+    const redirectTo = `${redirectBase}`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo },
@@ -894,6 +916,62 @@ export class GdmLiveAudio extends LitElement {
       if (Array.isArray(existing)) this.testHistory = existing as TestRecord[];
     } catch {
       // ignore
+    }
+  }
+
+  // --- Supabase history ---
+  private async saveSupabaseTest(score: string, feedback: string) {
+    try {
+      if (!this.user || !supabase) return;
+      const testName = `IELTS Test ${this.testHistory.length + 1}`;
+      const payload: any = {
+        user_id: this.user.id,
+        name: testName,
+        transcript: this.currentTranscript,
+        score,
+        feedback,
+        part2_topic: this.part2Topic || null,
+      };
+      const { error } = await supabase.from('speaking_tests').insert([payload]);
+      if (error) {
+        console.warn('Supabase save failed', error);
+        return;
+      }
+      // Optimistically update local view
+      const record: TestRecord = {
+        id: Date.now(),
+        name: testName,
+        date: new Date().toLocaleDateString(),
+        transcript: this.currentTranscript,
+        score,
+        feedback,
+      };
+      this.testHistory = [record, ...this.testHistory];
+    } catch (e) {
+      console.warn('Supabase save exception', e);
+    }
+  }
+
+  private async loadSupabaseHistory() {
+    try {
+      if (!this.user || !supabase) return;
+      const { data, error } = await supabase
+        .from('speaking_tests')
+        .select('id, name, created_at, transcript, score, feedback')
+        .eq('user_id', this.user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error || !data) return;
+      this.testHistory = data.map((row: any) => ({
+        id: row.id || Date.now(),
+        name: row.name || 'IELTS Test',
+        date: row.created_at ? new Date(row.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+        transcript: (row.transcript as TranscriptEntry[]) || [],
+        score: row.score ?? 'N/A',
+        feedback: row.feedback ?? '',
+      }));
+    } catch (e) {
+      console.warn('Supabase load history failed', e);
     }
   }
 
@@ -1286,24 +1364,15 @@ export class GdmLiveAudio extends LitElement {
       const score = scoreMatch ? scoreMatch[1] : 'N/A';
       const feedback = resultText.replace(/Overall Score: [\d.]+\n?/, '');
 
-      // Save to cloud if signed in
-      if (this.user) {
-        const newTest: TestRecord = {
-          id: Date.now(),
-          name: `IELTS Test ${this.testHistory.length + 1}`,
-          date: new Date().toLocaleDateString(),
-          transcript: this.currentTranscript,
-          score,
-          feedback,
-        };
-      }
-      // Save locally
+      // Save to Supabase (if logged in) and locally
+      await this.saveSupabaseTest(score, feedback);
       this.saveLocalTest(score, feedback);
       this.updateStatus(`Test complete! Your score is ${score}.`);
     } catch (e) {
       this.updateError('Could not generate score. Test saved without score.');
       console.error('Scoring error:', e);
-      // Save locally even if scoring failed
+      // Save even if scoring failed
+      await this.saveSupabaseTest('N/A', '');
       this.saveLocalTest('N/A', '');
     } finally {
       this.isScoring = false;
@@ -1450,6 +1519,13 @@ export class GdmLiveAudio extends LitElement {
         </div>
 
         <div class="bottom-controls">
+          ${this.user
+            ? html`<div class="history-toggle">
+                <button @click=${() => (this.isHistoryVisible = !this.isHistoryVisible)}>
+                  ${this.isHistoryVisible ? 'Close History' : 'My History'}
+                </button>
+              </div>`
+            : ''}
           <div
             class="ielts-parts"
             ?hidden=${this.isRecording || this.isPreparing}>
