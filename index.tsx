@@ -936,22 +936,14 @@ export class GdmLiveAudio extends LitElement {
       this.addExaminer(line);
       const before = this.audioEvents;
       try { this.session.sendRealtimeInput({ text: line }); } catch {}
-      // Wait briefly for audio; fallback to SpeechSynthesis if nothing arrives
-      const waited = 800;
-      await new Promise((r) => setTimeout(r, waited));
-      if (this.audioEvents === before) {
-        // Fallback TTS
-        try {
-          const synth: any = (window as any).speechSynthesis;
-          if (synth) {
-            const u = new SpeechSynthesisUtterance(line);
-            u.lang = 'en-US';
-            synth.speak(u);
-          }
-        } catch {}
+      // Wait until we receive at least one audio chunk or a short timeout
+      const start = performance.now();
+      while (this.audioEvents === before && performance.now() - start < 2000) {
+        await new Promise((r) => setTimeout(r, 50));
       }
       if (this.speakCancel) break;
-      await new Promise((r) => setTimeout(r, 200));
+      // Small gap before next line to avoid overlap
+      await new Promise((r) => setTimeout(r, 150));
     }
     this.speaking = false;
   }
