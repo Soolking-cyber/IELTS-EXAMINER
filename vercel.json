@@ -1,11 +1,14 @@
 {
+  "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm ci",
-  "framework": "vite",
-  "functions": {
-    "api/**/*.js": {
-      "runtime": "vercel-nodejs@4.0.0"
-    }
-  }
+  "builds": [
+    { "src": "api/**/*.js", "use": "@vercel/node@3" },
+    { "src": "dist/**", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "^/api/.*", "dest": "/api" },
+    { "src": "/(.*)", "dest": "/dist/$1" }
+  ]
 }
