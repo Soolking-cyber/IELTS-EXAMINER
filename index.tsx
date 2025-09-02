@@ -178,6 +178,38 @@ export class GdmLiveAudio extends LitElement {
       z-index: 2; /* Keep UI above visuals */
     }
 
+    /* Live overlay lines */
+    #live-overlay {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 6;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 6px;
+      max-width: min(90vw, 780px);
+      pointer-events: none;
+    }
+    .live-line {
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #eaf6ff;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.35;
+      animation: livefade 6s ease forwards;
+    }
+    .live-line.user { color: #d3ffe2; }
+    .live-line.ai { color: #eaf6ff; }
+    @keyframes livefade {
+      0% { opacity: 0; transform: translateY(-4px); }
+      8% { opacity: 1; transform: translateY(0); }
+      85% { opacity: 1; }
+      100% { opacity: 0; transform: translateY(6px); }
+    }
+
     .main-content-area {
       flex-grow: 1;
       display: flex;
@@ -1500,6 +1532,10 @@ export class GdmLiveAudio extends LitElement {
               </div>
             `,
           )}
+          <!-- Live overlay lines -->
+          <div id="live-overlay">
+            ${this.liveLines.map(l => html`<div class="live-line ${l.role}">${l.text}</div>`)}
+          </div>
         </div>
       </div>
     `;
@@ -1733,6 +1769,13 @@ export class GdmLiveAudio extends LitElement {
     try { localStorage.setItem('trtc_config', JSON.stringify(cfg)); } catch {}
     this.updateStatus('TRTC configuration saved.');
   };
+  private addLiveLine(text: string, role: 'user'|'ai') {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+    this.liveLines = [{ id, text, role }, ...this.liveLines].slice(0, 8);
+    setTimeout(() => {
+      this.liveLines = this.liveLines.filter(l => l.id !== id);
+    }, 6000);
+  }
 
   private renderHistoryTab() {
     return html`${this.selectedTest ? this.renderTestDetails() : this.renderHistoryList()}`;
