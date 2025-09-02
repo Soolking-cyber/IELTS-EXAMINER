@@ -1656,6 +1656,9 @@ export class GdmLiveAudio extends LitElement {
       
       console.log('TRTC enterRoom params:', enterRoomParams);
       await trtc.enterRoom(enterRoomParams);
+      // Resume audio contexts to satisfy autoplay policies
+      try { await this.outputAudioContext.resume(); } catch {}
+      try { await this.inputAudioContext.resume(); } catch {}
       await trtc.startLocalAudio();
       // Notify backend to start AI conversation with questions/cues
       const startPayload: any = { RoomId: roomId, UserId: userId, AgentId: (this.trtcAgentId || process.env.TENCENT_AGENT_ID || undefined) };
@@ -1668,6 +1671,8 @@ export class GdmLiveAudio extends LitElement {
         try { errTxt = await startRes.text(); } catch {}
         console.error('StartAIConversation failed', startRes.status, errTxt);
         this.updateStatus('AI conversation start failed. Check cloud credentials/AgentId.');
+      } else {
+        try { console.log('StartAIConversation ok', await startRes.json()); } catch {}
       }
       (this as any).trtc = trtc;
       // Start browser transcription so history works
