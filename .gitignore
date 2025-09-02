@@ -17,8 +17,11 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+__pycache__/
+.dev.pid
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+.vercel

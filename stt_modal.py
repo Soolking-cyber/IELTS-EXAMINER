@@ -1,4 +1,4 @@
-from modal import Image, App, asgi_app
+from modal import Image, App, asgi_app, Secret
 from typing import Optional
 import tempfile
 import os
@@ -114,5 +114,61 @@ def fastapi_app():
                     os.remove(p)
                 except Exception:
                     pass
+
+    return app
+
+@app.function(secrets=[Secret.from_name("openrouter")])
+@asgi_app()
+def llm_app():
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    import os, httpx
+
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    @app.post("/llm")
+    async def llm(payload: dict):
+        if not OPENROUTER_API_KEY:
+            return {"error": "OPENROUTER_API_KEY not configured"}, 500
+        model = payload.get("model") or "openai/gpt-oss-20b:free"
+        messages = payload.get("messages") or []
+        system = payload.get("system")
+        if system:
+            messages = [{"role": "system", "content": system}] + messages
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": payload.get("temperature", 0.6),
+        }
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            # Optional but recommended by OpenRouter
+            "HTTP-Referer": os.environ.get("SITE_URL", "https://example.com"),
+            "X-Title": "IELTS-EXAMINER",
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post("https://openrouter.ai/api/v1/chat/completions", json=data, headers=headers)
+            ct = r.headers.get("content-type", "application/json")
+            if r.status_code >= 400:
+                return {"error": "upstream_error", "status": r.status_code, "body": r.text[:500]}, r.status_code
+            try:
+                obj = r.json()
+                content = obj.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return {"text": content}
+            except Exception:
+                return {"raw": r.text}, 200
 
     return app
