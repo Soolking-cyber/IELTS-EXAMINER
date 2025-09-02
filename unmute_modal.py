@@ -193,28 +193,42 @@ def unmute_app():
         return {"tts": t, "stt": s}
 
     @app.post("/stt")
-    async def stt_proxy(audio: bytes = None):
-        # Accept multipart or raw bytes and transcribe with faster-whisper as a bridge
+    async def stt_proxy(audio: "UploadFile" = None, language: str = "en"):
+        """Prefer Unmute moshi ASR (/api/asr-streaming). Fallback to faster-whisper bridge."""
+        from fastapi import UploadFile
         import tempfile, os, subprocess
         from faster_whisper import WhisperModel
-        # Read body
-        body = None
-        if audio is not None and len(audio) > 0:
-            body = audio
-        else:
-            # In case of multipart/form-data, FastAPI parsed file is not bound in this signature.
-            # Attempt to read from request stream is complex here; recommend client send as raw or form field name 'audio'.
-            pass
-        if not body:
+
+        if not isinstance(audio, UploadFile):
+            return {"text": "", "note": "no_audio"}, 200
+
+        raw = await audio.read()
+        if not raw or len(raw) < 1024:
             return {"text": "", "note": "empty_or_short_chunk"}, 200
 
+        # Try Unmute moshi server first
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                ct = audio.content_type or "application/octet-stream"
+                r = await client.post(
+                    f"http://127.0.0.1:8090/api/asr-streaming?language={language}",
+                    content=raw,
+                    headers={"Content-Type": ct},
+                )
+                if r.status_code < 400:
+                    if r.headers.get("content-type", "").startswith("application/json"):
+                        return r.json()
+                    return {"text": r.text.strip()}
+        except Exception:
+            pass
+
+        # Fallback: transcode and run faster-whisper locally
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-            tmp.write(body)
+            tmp.write(raw)
             tmp.flush()
             in_path = tmp.name
         wav_path = in_path + ".wav"
         try:
-            # Transcode to 16k mono wav
             cmd = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", in_path,
@@ -229,14 +243,13 @@ def unmute_app():
                     return {"text": "", "note": "empty_or_short_chunk"}, 200
             except Exception:
                 return {"text": "", "note": "no_output_file"}, 200
-            # Transcribe
             model = getattr(app.state, "whisper_model", None)
             if model is None:
                 model = WhisperModel("small.en", compute_type="int8")
                 app.state.whisper_model = model
-            segments, info = model.transcribe(wav_path, beam_size=5, language="en")
+            segments, info = model.transcribe(wav_path, beam_size=5, language=language)
             text = "".join(seg.text for seg in segments).strip()
-            return {"text": text, "language": getattr(info, 'language', 'en'), "duration": getattr(info, 'duration', 0)}
+            return {"text": text, "language": getattr(info, 'language', language), "duration": getattr(info, 'duration', 0)}
         finally:
             for p in (in_path, wav_path):
                 try:
