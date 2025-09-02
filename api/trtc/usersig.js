@@ -59,21 +59,8 @@ export default async function handler(req, res) {
     const { userId, expire = 86400 } = req.body || {};
     if (!userId) return res.status(400).json({ error: 'userId required' });
     
-    let userSig;
-    
-    // Try using official library first
-    if (TLSSigAPIv2) {
-      try {
-        const api = new TLSSigAPIv2.Api(sdkAppId, secretKey);
-        userSig = api.genUserSig(String(userId), Number(expire));
-        console.log('Using official TLS-SIG-API-V2 library');
-      } catch (e) {
-        console.log('Official library failed, falling back to manual implementation:', e.message);
-        userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
-      }
-    } else {
-      userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
-    }
+    // Use manual implementation for consistency
+    const userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
     
     // Debug logging (remove in production)
     console.log('UserSig generation:', {
@@ -82,8 +69,25 @@ export default async function handler(req, res) {
       expire: Number(expire),
       secretKeyLength: secretKey.length,
       userSigLength: userSig.length,
-      method: TLSSigAPIv2 ? 'official-library' : 'manual'
+      method: 'manual',
+      secretKeyPrefix: secretKey.substring(0, 8),
+      secretKeySuffix: secretKey.substring(secretKey.length - 8)
     });
+    
+    // Decode and log the UserSig structure for debugging
+    try {
+      const decoded = JSON.parse(Buffer.from(userSig, 'base64').toString('utf8'));
+      console.log('Generated UserSig structure:', {
+        version: decoded['TLS.ver'],
+        sdkappid: decoded['TLS.sdkappid'],
+        identifier: decoded['TLS.identifier'],
+        expire: decoded['TLS.expire'],
+        time: decoded['TLS.time'],
+        signatureLength: decoded['TLS.sig']?.length
+      });
+    } catch (e) {
+      console.error('Failed to decode UserSig for debugging:', e.message);
+    }
     
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({ sdkAppId, userId, userSig, expire });
