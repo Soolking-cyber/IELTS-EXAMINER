@@ -520,6 +520,26 @@ export class GdmLiveAudio extends LitElement {
       background: #1a1a1a;
     }
 
+    .demo-link {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #0066cc;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 1000;
+      transition: all 0.2s ease;
+    }
+
+    .demo-link:hover {
+      background: #0052a3;
+      transform: translateY(-2px);
+    }
+
     /* History Panel Styles */
     #historyPanel {
       position: fixed;
@@ -1730,20 +1750,7 @@ export class GdmLiveAudio extends LitElement {
       <div>
         <h3 style="margin:8px 0 4px;">${name}</h3>
         <div style="color:#aaa; font-size:14px; margin-bottom:10px;">Signed in with Google</div>
-        <h4 style="margin:12px 0 6px;">TRTC Settings</h4>
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; align-items:center;">
-          <label>Room ID</label>
-          <input style="background:#111;border:1px solid #333;color:#fff;padding:6px 8px;border-radius:6px;"
-            type="number" .value=${String(this.trtcRoomId ?? '')} @input=${(e: any) => this.trtcRoomId = Number(e.target.value || 0)} />
-          <label>User ID</label>
-          <input style="background:#111;border:1px solid #333;color:#fff;padding:6px 8px;border-radius:6px;"
-            type="text" .value=${this.trtcUserId ?? ''} @input=${(e: any) => this.trtcUserId = e.target.value} />
-          <label>Agent ID</label>
-          <input style="background:#111;border:1px solid #333;color:#fff;padding:6px 8px;border-radius:6px;"
-            type="text" .value=${this.trtcAgentId ?? ''} @input=${(e: any) => this.trtcAgentId = e.target.value} />
-          <div></div>
-          <button class="logout-btn" @click=${this.saveTrtcConfig}>Save TRTC Config</button>
-        </div>
+        <!-- TRTC settings auto-assigned; no manual input required. -->
         <h4 style="margin:12px 0 6px;">Previous Scores</h4>
         ${scores.length === 0
           ? html`<div style="color:#aaa;">No tests yet.</div>`
@@ -1758,25 +1765,17 @@ export class GdmLiveAudio extends LitElement {
       if (raw) {
         const obj = JSON.parse(raw);
         this.trtcRoomId = typeof obj.roomId === 'number' ? obj.roomId : (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : null);
-        this.trtcUserId = obj.userId || (process.env.TENCENT_USER_ID || null);
-        this.trtcAgentId = obj.agentId || (process.env.TENCENT_AGENT_ID || null);
+        this.trtcUserId = obj.userId || process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2,8)}`;
+        this.trtcAgentId = obj.agentId || process.env.TENCENT_AGENT_ID || "robot_id";
       } else {
-        this.trtcRoomId = process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : null;
-        this.trtcUserId = process.env.TENCENT_USER_ID || null;
-        this.trtcAgentId = process.env.TENCENT_AGENT_ID || null;
+        this.trtcRoomId = process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : (Math.floor(Math.random()*90000)+10000);
+        this.trtcUserId = process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2,8)}`;
+        this.trtcAgentId = process.env.TENCENT_AGENT_ID || "robot_id";
       }
     } catch {}
   }
 
-  private saveTrtcConfig = () => {
-    const cfg = {
-      roomId: this.trtcRoomId ? Number(this.trtcRoomId) : null,
-      userId: this.trtcUserId || null,
-      agentId: this.trtcAgentId || null,
-    };
-    try { localStorage.setItem('trtc_config', JSON.stringify(cfg)); } catch {}
-    this.updateStatus('TRTC configuration saved.');
-  };
+  
   private addLiveLine(text: string, role: 'user'|'ai') {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
     this.liveLines = [{ id, text, role }, ...this.liveLines].slice(0, 8);

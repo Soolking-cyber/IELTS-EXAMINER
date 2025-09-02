@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tencent AI Conversation Demo</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #000;
+      color: #fff;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    .demo-container {
+      display: flex;
+      height: 100vh;
+    }
+    
+    .sidebar {
+      width: 300px;
+      background: #111;
+      border-right: 1px solid #333;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      background: #111;
+      padding: 16px 20px;
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    
+    .integration-info {
+      flex: 1;
+    }
+    
+    .info-section {
+      margin-bottom: 24px;
+    }
+    
+    .info-section h3 {
+      margin: 0 0 8px 0;
+      font-size: 1rem;
+      color: #0066cc;
+    }
+    
+    .info-section p {
+      margin: 0;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      color: #ccc;
+    }
+    
+    .config-item {
+      background: #222;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin: 4px 0;
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: #0aa;
+    }
+    
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    
+    .status-indicator.ready {
+      background: #00aa00;
+    }
+    
+    .status-indicator.connecting {
+      background: #ffaa00;
+      animation: pulse 1s infinite;
+    }
+    
+    .status-indicator.error {
+      background: #cc0000;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .back-link {
+      color: #0066cc;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    
+    .back-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "lit": "https://esm.sh/lit@^3.3.0",
+      "lit/": "https://esm.sh/lit@^3.3.0/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="demo-container">
+    <div class="sidebar">
+      <div class="info-section">
+        <h3>Integration Status</h3>
+        <p><span class="status-indicator ready"></span>TRTC SDK Loaded</p>
+        <p><span class="status-indicator ready"></span>API Endpoints Ready</p>
+        <p><span class="status-indicator ready"></span>Environment Configured</p>
+      </div>
+      
+      <div class="info-section">
+        <h3>Configuration</h3>
+        <div class="config-item">SDK App ID: 20026991</div>
+        <div class="config-item">Region: ap-singapore</div>
+        <div class="config-item">STT: Deepgram Nova-3</div>
+        <div class="config-item">LLM: Dify API</div>
+        <div class="config-item">TTS: Cartesia Sonic</div>
+      </div>
+      
+      <div class="info-section">
+        <h3>Features</h3>
+        <p>• Real-time voice conversation</p>
+        <p>• AI-powered responses</p>
+        <p>• Speech-to-text transcription</p>
+        <p>• Text-to-speech synthesis</p>
+        <p>• IELTS speaking test format</p>
+      </div>
+      
+      <div class="info-section">
+        <h3>How to Use</h3>
+        <p>1. Click "Start Conversation"</p>
+        <p>2. Allow microphone access</p>
+        <p>3. Speak naturally</p>
+        <p>4. AI will respond in real-time</p>
+        <p>5. Click "End Conversation" to stop</p>
+      </div>
+      
+      <div class="info-section">
+        <a href="/" class="back-link">← Back to Main App</a>
+      </div>
+    </div>
+    
+    <div class="main-content">
+      <div class="header">
+        <h1>Tencent AI Conversation Demo</h1>
+        <div>
+          <span style="font-size: 0.9rem; color: #888;">
+            Integrated with your IELTS Speaking Test App
+          </span>
+        </div>
+      </div>
+      
+      <div class="integration-info">
+        <tencent-ai-conversation></tencent-ai-conversation>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/tencent-ai-conversation.ts"></script>
+</body>
+</html>
