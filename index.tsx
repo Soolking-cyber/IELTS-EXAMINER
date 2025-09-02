@@ -713,7 +713,6 @@ export class GdmLiveAudio extends LitElement {
     const { data } = await supabase.auth.getSession();
     this.user = data.session?.user ?? null;
     this.authInitialized = true;
-    this.initClient();
     if (this.user) this.loadSupabaseHistory(); else this.loadLocalHistory();
     supabase.auth.onAuthStateChange((_event, session) => {
       this.user = session?.user ?? null;
@@ -1513,8 +1512,8 @@ export class GdmLiveAudio extends LitElement {
 
   private reset() {
     if (this.isRecording) return;
-
-    this.session?.close();
+    // Stop any ongoing TRTC conversation and timers
+    try { this.stopTencentConversation(); } catch {}
     this.stopRecording();
     this.stopTimer();
     this.stopPreparationTimer();
@@ -1533,7 +1532,6 @@ export class GdmLiveAudio extends LitElement {
     this.isPreparing = false;
     this.initialPrompt = null;
     this.currentTranscript = [];
-    this.initSession();
     this.updateStatus('Session cleared.');
   }
 
