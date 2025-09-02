@@ -60,6 +60,12 @@ export class GdmLiveAudio extends LitElement {
   @state() isScoring = false;
   @state() isProfileVisible = false;
   @state() profileTab: 'profile' | 'history' = 'profile';
+  // TRTC runtime configuration
+  @state() trtcRoomId: number | null = null;
+  @state() trtcUserId: string | null = null;
+  @state() trtcAgentId: string | null = null;
+  // Transcription indicator
+  @state() isTranscribing = false;
   // Speech-to-text (browser)
   private recognition: any = null;
   private sttRestartOnEnd = false;
@@ -94,6 +100,21 @@ export class GdmLiveAudio extends LitElement {
   private sourceNode: AudioBufferSourceNode;
   private mediaRecorder: MediaRecorder | null = null;
   private startingRecording = false;
+  private trtc: any = null;
+  private async loadScript(src: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+      if (existing) return resolve();
+      const s = document.createElement('script');
+      s.src = src; s.async = true; s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  private async getTrtcSdk(): Promise<any> {
+    if ((window as any).TRTC?.create) return (window as any).TRTC;
+    await this.loadScript('https://cdn.jsdelivr.net/npm/trtc-sdk-v5/dist/trtc.min.js');
+    return (window as any).TRTC;
+  }
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
@@ -702,6 +723,7 @@ export class GdmLiveAudio extends LitElement {
     super.connectedCallback();
     this.setupAuth();
     this.loadLocalHistory();
+    this.loadTrtcConfig();
   }
 
   private async setupAuth() {
@@ -1027,6 +1049,9 @@ export class GdmLiveAudio extends LitElement {
       this.recognition.continuous = true;
       this.recognition.interimResults = true;
       this.recognition.lang = 'en-US';
+      this.recognition.onstart = () => {
+        this.isTranscribing = true;
+      };
       this.recognition.onresult = (event: any) => {
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const res = event.results[i];
@@ -1061,6 +1086,9 @@ export class GdmLiveAudio extends LitElement {
       this.recognition.onend = () => {
         if (this.isRecording) {
           try { this.recognition.start(); } catch {}
+          this.isTranscribing = true;
+        } else {
+          this.isTranscribing = false;
         }
       };
     }
@@ -1298,37 +1326,34 @@ export class GdmLiveAudio extends LitElement {
   private async startTencentConversation() {
     if (this.isRecording || !this.selectedPart) return;
     try {
-      const roomId = Number(process.env.TENCENT_ROOM_ID || 10001);
-      const userId = (process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2, 8)}`);
+      const roomId = Number((this.trtcRoomId ?? (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : 10001)));
+      const userId = (this.trtcUserId || process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2, 8)}`);
       const sigRes = await fetch('/api/trtc/usersig', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId })
       });
       if (!sigRes.ok) throw new Error(await sigRes.text());
       const { sdkAppId, userSig } = await sigRes.json();
-      // Lazy import to avoid bundling issues if TRTC not supported
-      const TRTCMod: any = await import('trtc-js-sdk');
-      if (!TRTCMod.default?.checkSystemRequirements?.() && !TRTCMod.checkSystemRequirements?.()) {
-        throw new Error('TRTC not supported in this browser');
-      }
-      const TRTCAny: any = TRTCMod.default || TRTCMod;
-      const client = TRTCAny.createClient({ mode: 'rtc', sdkAppId, userId, userSig });
-      await client.join({ roomId });
-      const track = await TRTCAny.createMicrophoneAudioTrack();
-      await client.publish(track);
-      (client as any).on('stream-added', async (event: any) => {
-        try { await client.subscribe(event.stream, { audio: true, video: false }); } catch {}
+      const TRTCsdk: any = await this.getTrtcSdk();
+      if (!TRTCsdk?.isSupported?.()) throw new Error('TRTC not supported in this browser');
+      const trtc = TRTCsdk.create();
+      // Handle kicks
+      trtc.on(TRTCsdk.EVENT.KICKED_OUT, (err: any) => {
+        console.error('Kicked from TRTC room', err);
+        this.stopTencentConversation();
       });
-      (client as any).on('stream-subscribed', (event: any) => {
-        try { event.stream.play(); } catch {}
+      // Optional: handle remote audio available
+      trtc.on(TRTCsdk.EVENT.REMOTE_AUDIO_AVAILABLE, (event: any) => {
+        try { trtc.muteRemoteAudio(event.userId, false); } catch {}
       });
+      await trtc.enterRoom({ sdkAppId, userId, userSig, roomId });
+      await trtc.startLocalAudio();
       // Notify backend to start AI conversation with questions/cues
-      const startPayload: any = { RoomId: roomId, UserId: userId, AgentId: process.env.TENCENT_AGENT_ID || undefined };
+      const startPayload: any = { RoomId: roomId, UserId: userId, AgentId: (this.trtcAgentId || process.env.TENCENT_AGENT_ID || undefined) };
       if (this.selectedPart === 'part1') startPayload.Questions = this.part1Set || [];
       if (this.selectedPart === 'part2') startPayload.CueCard = this.part2Topic || '';
       if (this.selectedPart === 'part3') { startPayload.Part2Topic = this.part2Topic || ''; startPayload.Questions = this.part3Set || []; }
       await fetch('/api/trtc/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(startPayload) });
-      (this as any).trtcClient = client;
-      (this as any).localTrack = track;
+      (this as any).trtc = trtc;
       // Start browser transcription so history works
       this.startSpeechRecognition();
       this.isRecording = true;
@@ -1344,19 +1369,18 @@ export class GdmLiveAudio extends LitElement {
   private async stopTencentConversation() {
     if (!this.isRecording) return;
     try {
-      const roomId = Number(process.env.TENCENT_ROOM_ID || 10001);
+      const roomId = Number((this.trtcRoomId ?? (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : 10001)));
       await fetch('/api/trtc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ RoomId: roomId }) });
     } catch (e) { console.warn('TRTC stop error', e); }
     try {
-      const client: any = (this as any).trtcClient;
-      const track: any = (this as any).localTrack;
-      if (client) {
-        if (track) { try { await client.unpublish(track); } catch {} try { track.stop(); track.close(); } catch {} }
-        await client.leave();
+      const trtc: any = (this as any).trtc;
+      if (trtc) {
+        try { await trtc.stopLocalAudio(); } catch {}
+        try { await trtc.exitRoom(); } catch {}
+        try { trtc.destroy(); } catch {}
       }
     } catch {}
-    (this as any).trtcClient = null;
-    (this as any).localTrack = null;
+    (this as any).trtc = null;
     this.stopSpeechRecognition();
     this.isRecording = false;
     this.stopTimer();
@@ -1606,6 +1630,7 @@ export class GdmLiveAudio extends LitElement {
             <div style="width: 56px; height: 56px;"></div>
           </div>
           <div id="status">${this.error || this.status}</div>
+          ${this.isRecording ? html`<div style="color:#7ad7ff; font-size:12px;">${this.isTranscribing ? 'Transcribing…' : ''}</div>` : ''}
         </div>
       </div>
       <div id="timer" ?hidden=${showOverlay}>
@@ -1661,6 +1686,20 @@ export class GdmLiveAudio extends LitElement {
       <div>
         <h3 style="margin:8px 0 4px;">${name}</h3>
         <div style="color:#aaa; font-size:14px; margin-bottom:10px;">Signed in with Google</div>
+        <h4 style="margin:12px 0 6px;">TRTC Settings</h4>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; align-items:center;">
+          <label>Room ID</label>
+          <input style="background:#111;border:1px solid #333;color:#fff;padding:6px 8px;border-radius:6px;"
+            type="number" .value=${String(this.trtcRoomId ?? '')} @input=${(e: any) => this.trtcRoomId = Number(e.target.value || 0)} />
+          <label>User ID</label>
+          <input style="background:#111;border:1px solid #333;color:#fff;padding:6px 8px;border-radius:6px;"
+            type="text" .value=${this.trtcUserId ?? ''} @input=${(e: any) => this.trtcUserId = e.target.value} />
+          <label>Agent ID</label>
+          <input style="background:#111;border:1px solid #333;color:#fff;padding:6px 8px;border-radius:6px;"
+            type="text" .value=${this.trtcAgentId ?? ''} @input=${(e: any) => this.trtcAgentId = e.target.value} />
+          <div></div>
+          <button class="logout-btn" @click=${this.saveTrtcConfig}>Save TRTC Config</button>
+        </div>
         <h4 style="margin:12px 0 6px;">Previous Scores</h4>
         ${scores.length === 0
           ? html`<div style="color:#aaa;">No tests yet.</div>`
@@ -1668,6 +1707,32 @@ export class GdmLiveAudio extends LitElement {
       </div>
     `;
   }
+
+  private loadTrtcConfig() {
+    try {
+      const raw = localStorage.getItem('trtc_config');
+      if (raw) {
+        const obj = JSON.parse(raw);
+        this.trtcRoomId = typeof obj.roomId === 'number' ? obj.roomId : (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : null);
+        this.trtcUserId = obj.userId || (process.env.TENCENT_USER_ID || null);
+        this.trtcAgentId = obj.agentId || (process.env.TENCENT_AGENT_ID || null);
+      } else {
+        this.trtcRoomId = process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : null;
+        this.trtcUserId = process.env.TENCENT_USER_ID || null;
+        this.trtcAgentId = process.env.TENCENT_AGENT_ID || null;
+      }
+    } catch {}
+  }
+
+  private saveTrtcConfig = () => {
+    const cfg = {
+      roomId: this.trtcRoomId ? Number(this.trtcRoomId) : null,
+      userId: this.trtcUserId || null,
+      agentId: this.trtcAgentId || null,
+    };
+    try { localStorage.setItem('trtc_config', JSON.stringify(cfg)); } catch {}
+    this.updateStatus('TRTC configuration saved.');
+  };
 
   private renderHistoryTab() {
     return html`${this.selectedTest ? this.renderTestDetails() : this.renderHistoryList()}`;
