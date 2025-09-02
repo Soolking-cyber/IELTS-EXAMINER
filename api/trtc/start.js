@@ -39,6 +39,36 @@ async function handler(req, res) {
     // Remove AgentId in favor of AgentConfig.UserId
     if (params.AgentId) delete params.AgentId;
 
+    // Map IELTS-specific fields into a welcome prompt and strip unsupported keys
+    try {
+      const q = input.Questions;
+      const cue = input.CueCard || input.Part2Topic;
+      let summary = '';
+      if (Array.isArray(q) && q.length) {
+        if (typeof q[0] === 'string') {
+          summary += `You are the IELTS examiner. Ask the candidate these Part 3 questions, one by one, allowing time to answer. Questions: ${q.join(' | ')}. `;
+        } else if (q[0] && typeof q[0] === 'object') {
+          const blocks = q.map((g) => {
+            const topic = g.topic || 'Topic';
+            const qs = Array.isArray(g.questions) ? g.questions.join('; ') : '';
+            return `${topic}: ${qs}`;
+          }).join(' | ');
+          summary += `You are the IELTS examiner. Begin Part 1. Ask brief personal questions as listed: ${blocks}. `;
+        }
+      }
+      if (cue && typeof cue === 'string') {
+        summary += `For reference, the Part 2 cue card is: ${cue}. `;
+      }
+      if (summary) {
+        params.AgentConfig = params.AgentConfig || {};
+        const baseWelcome = params.AgentConfig.WelcomeMessage || 'Welcome to IELTS Speaking Test!';
+        params.AgentConfig.WelcomeMessage = `${baseWelcome} ${summary}`.trim();
+      }
+    } catch {}
+    delete params.Questions;
+    delete params.Part2Topic;
+    delete params.CueCard;
+
     // Ensure SdkAppId present
     if (!params.SdkAppId && TENCENT_SDK_APP_ID) params.SdkAppId = Number(TENCENT_SDK_APP_ID);
 
