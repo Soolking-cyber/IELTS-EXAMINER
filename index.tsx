@@ -100,6 +100,7 @@ export class GdmLiveAudio extends LitElement {
   private mediaStream: MediaStream;
   private sourceNode: AudioBufferSourceNode;
   private mediaRecorder: MediaRecorder | null = null;
+  private startingRecording = false;
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
@@ -1331,9 +1332,10 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private async startRecording() {
-    if (this.isRecording || !this.selectedPart || this.isPreparing) {
+    if (this.isRecording || this.startingRecording || !this.selectedPart || this.isPreparing) {
       return;
     }
+    this.startingRecording = true;
 
     const duration = this.partDurations[this.selectedPart];
     this.timer = duration;
@@ -1354,6 +1356,8 @@ export class GdmLiveAudio extends LitElement {
     this.updateStatus('Requesting microphone access...');
 
     try {
+      // Mark early to avoid race with repeated clicks
+      this.isRecording = true;
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: false,
@@ -1371,11 +1375,12 @@ export class GdmLiveAudio extends LitElement {
       if ((window as any).MediaRecorder) {
         this.mediaRecorder = new MediaRecorder(this.mediaStream, { mimeType: mime });
         this.mediaRecorder.ondataavailable = (ev: BlobEvent) => {
-          if (!ev.data || ev.data.size === 0) return;
+          if (!ev.data || ev.data.size < 2048) return; // drop tiny/silent chunks
           this.transcribeChunk(ev.data);
         };
-        // Reduce STT chunk size from 5s to 2s for lower latency
-        try { this.mediaRecorder.start(2000); } catch {}
+        this.mediaRecorder.onstop = () => { this.mediaRecorder = null; };
+        // Increase STT chunk size to 10s to reduce request volume
+        try { this.mediaRecorder.start(10000); } catch {}
       }
 
       this.isRecording = true;
@@ -1385,8 +1390,10 @@ export class GdmLiveAudio extends LitElement {
     } catch (err) {
       console.error('Error starting recording:', err);
       this.updateStatus(`Error: ${err.message}`);
+      this.isRecording = false;
       this.stopRecording();
     }
+    this.startingRecording = false;
   }
 
   private stopRecording() {
