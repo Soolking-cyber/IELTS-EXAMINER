@@ -4,60 +4,96 @@ import crypto from 'crypto';
 import { Buffer } from 'buffer';
 import zlib from 'zlib';
 
-// LibGenerateTestUserSig equivalent implementation
-class LibGenerateTestUserSig {
-  constructor(sdkAppId, secretKey, expireTime) {
-    this.sdkAppId = sdkAppId;
-    this.secretKey = secretKey;
-    this.expireTime = expireTime;
+// Base64URL utilities (exact from Tencent's official code)
+const base64url = {};
+const newBuffer = function (fill, encoding) {
+  return Buffer.from ? Buffer.from(fill, encoding) : new Buffer(fill, encoding);
+};
+
+base64url.unescape = function unescape(str) {
+  return (str + Array(5 - str.length % 4)).replace(/_/g, '=').replace(/\-/g, '/').replace(/\*/g, '+');
+};
+
+base64url.escape = function escape(str) {
+  return str.replace(/\+/g, '*').replace(/\//g, '-').replace(/=/g, '_');
+};
+
+base64url.encode = function encode(str) {
+  return this.escape(newBuffer(str).toString('base64'));
+};
+
+base64url.decode = function decode(str) {
+  return newBuffer(this.unescape(str), 'base64').toString();
+};
+
+function base64encode(str) {
+  return newBuffer(str).toString('base64');
+}
+
+function base64decode(str) {
+  return newBuffer(str, 'base64').toString();
+}
+
+// Tencent's Official API Class (exact implementation)
+class TencentApi {
+  constructor(sdkappid, key) {
+    this.sdkappid = sdkappid;
+    this.key = key;
   }
 
-  genTestUserSig(userId) {
-    const current = Math.floor(Date.now() / 1000);
-    const expire = this.expireTime;
+  // Generate the hmac value of base64 by passing in the parameters (exact from Tencent)
+  _hmacsha256(identifier, currTime, expire, base64UserBuf) {
+    let contentToBeSigned = "TLS.identifier:" + identifier + "\n";
+    contentToBeSigned += "TLS.sdkappid:" + this.sdkappid + "\n";
+    contentToBeSigned += "TLS.time:" + currTime + "\n";
+    contentToBeSigned += "TLS.expire:" + expire + "\n";
+    if (null != base64UserBuf) {
+      contentToBeSigned += "TLS.userbuf:" + base64UserBuf + "\n";
+    }
+    const hmac = crypto.createHmac("sha256", this.key);
+    return hmac.update(contentToBeSigned).digest('base64');
+  }
 
-    // Create signature content exactly like Tencent's client library
-    const contentToBeSigned =
-      'TLS.identifier:' + userId + '\n' +
-      'TLS.sdkappid:' + this.sdkAppId + '\n' +
-      'TLS.time:' + current + '\n' +
-      'TLS.expire:' + expire + '\n';
-
-    // HMAC-SHA256 signature
-    const hmac = crypto.createHmac('sha256', this.secretKey);
-    hmac.update(contentToBeSigned, 'utf8');
-    const signature = hmac.digest('base64');
-
-    // Create the signature document
+  // Generate signature (exact from Tencent)
+  genSig(userid, expire, userBuf) {
+    const currTime = Math.floor(Date.now() / 1000);
     const sigDoc = {
-      'TLS.ver': '2.0',
-      'TLS.sdkappid': parseInt(this.sdkAppId),
-      'TLS.identifier': userId,
-      'TLS.expire': parseInt(expire),
-      'TLS.time': current,
-      'TLS.sig': signature
+      'TLS.ver': "2.0",
+      'TLS.identifier': "" + userid,
+      'TLS.sdkappid': Number(this.sdkappid),
+      'TLS.time': Number(currTime),
+      'TLS.expire': Number(expire)
     };
 
-    // Compress and encode like the original library
-    const jsonStr = JSON.stringify(sigDoc);
-    const compressed = zlib.deflateSync(Buffer.from(jsonStr, 'utf8'));
+    let sig = '';
+    if (null != userBuf) {
+      const base64UserBuf = base64encode(userBuf);
+      sigDoc['TLS.userbuf'] = base64UserBuf;
+      sig = this._hmacsha256(userid, currTime, expire, base64UserBuf);
+    } else {
+      sig = this._hmacsha256(userid, currTime, expire, null);
+    }
+    sigDoc['TLS.sig'] = sig;
 
-    return compressed.toString('base64')
-      .replace(/\+/g, '*')
-      .replace(/\//g, '-')
-      .replace(/=/g, '_');
+    const compressed = zlib.deflateSync(newBuffer(JSON.stringify(sigDoc))).toString('base64');
+    return base64url.escape(compressed);
+  }
+
+  // Generate UserSig (exact from Tencent)
+  genUserSig(userid, expire) {
+    return this.genSig(userid, expire, null);
   }
 }
 
-// Main function matching your format exactly
+// Wrapper function to match your client format
 function genTestUserSig({ sdkAppId, userId, sdkSecretKey }) {
   const SDKAPPID = sdkAppId;
-  const EXPIRETIME = 604800; // 7 days like in your example
+  const EXPIRETIME = 604800; // 7 days
   const SDKSECRETKEY = sdkSecretKey;
 
-  // Create generator instance
-  const generator = new LibGenerateTestUserSig(SDKAPPID, SDKSECRETKEY, EXPIRETIME);
-  const userSig = generator.genTestUserSig(userId);
+  // Use Tencent's official API
+  const api = new TencentApi(SDKAPPID, SDKSECRETKEY);
+  const userSig = api.genUserSig(userId, EXPIRETIME);
 
   return {
     sdkAppId: SDKAPPID,
