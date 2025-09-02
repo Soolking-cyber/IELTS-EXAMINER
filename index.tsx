@@ -4,13 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-  GoogleGenAI,
-  LiveServerMessage,
-  Modality,
-  Session,
-  Blob,
-} from '@google/genai';
+// Google GenAI removed
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
@@ -85,8 +79,7 @@ export class GdmLiveAudio extends LitElement {
   private preparationTimerInterval: any = null;
   private readonly partDurations = {part1: 300, part2: 120, part3: 300}; // in seconds
 
-  private client: GoogleGenAI;
-  private session: Session | null = null;
+  // Removed Google GenAI session
   // FIX: Property 'webkitAudioContext' does not exist on type 'Window & typeof globalThis'. Cast to any to allow fallback.
   private inputAudioContext = new (window.AudioContext ||
     (window as any).webkitAudioContext)({sampleRate: 16000});
@@ -753,88 +746,7 @@ export class GdmLiveAudio extends LitElement {
     this.nextStartTime = this.outputAudioContext.currentTime;
   }
 
-  private async initClient() {
-    this.initAudio();
-
-    const genAIApiKey = process.env.API_KEY;
-    if (!genAIApiKey || genAIApiKey === 'undefined') {
-      this.updateError(
-        'Google API Key is not configured. App cannot function.',
-      );
-      return;
-    }
-
-    this.client = new GoogleGenAI({
-      apiKey: genAIApiKey,
-    });
-
-    this.outputNode.connect(this.outputAudioContext.destination);
-    try { this.outputNode.gain.value = 1.0; } catch {}
-
-    this.initSession();
-  }
-
-  private async initSession() {
-    if (!this.client) return;
-    const model = 'gemini-2.5-flash-preview-native-audio-dialog';
-    try {
-      this.session = await this.client.live.connect({
-        model,
-        callbacks: {
-          onopen: () => {
-            this.updateStatus('Ready. Select a part to begin.');
-          },
-          onmessage: async (message: LiveServerMessage) => {
-            const parts: any[] = (message as any)?.serverContent?.modelTurn?.parts || [];
-            const audioPart = parts.find((p: any) => p?.inlineData);
-            const audio = audioPart?.inlineData;
-            if (audio) {
-              this.audioEvents++;
-              this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
-              const audioBuffer = await decodeAudioData(
-                decode(audio.data),
-                this.outputAudioContext,
-                24000,
-                1,
-              );
-              const source = this.outputAudioContext.createBufferSource();
-              source.buffer = audioBuffer;
-              source.connect(this.outputNode);
-              source.addEventListener('ended', () => {
-                this.sources.delete(source);
-              });
-              source.start(this.nextStartTime);
-              this.nextStartTime = this.nextStartTime + audioBuffer.duration;
-              this.sources.add(source);
-            }
-            const interrupted = message.serverContent?.interrupted;
-            if (interrupted) {
-              for (const source of this.sources.values()) {
-                try { source.stop(); } catch {}
-                this.sources.delete(source);
-              }
-              this.nextStartTime = 0;
-            }
-          },
-          onerror: (e: ErrorEvent) => {
-            this.updateError(e.message);
-          },
-          onclose: (e: CloseEvent) => {
-            this.updateStatus('Close:' + e.reason);
-          },
-        },
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Orus' } } },
-          systemInstruction:
-            'You are an IELTS examiner voice. When you receive text input, read it aloud verbatim, clearly and neutrally, and do not add any extra words or commentary.',
-        },
-      });
-    } catch (e) {
-      console.error(e);
-      this.updateError(`Failed to initialize audio session: ${e.message}`);
-    }
-  }
+  // Removed Google GenAI init/session
 
   private shuffle<T>(arr: T[]): T[] {
     const a = arr.slice();
