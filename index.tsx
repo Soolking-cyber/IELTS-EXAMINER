@@ -1172,8 +1172,7 @@ export class GdmLiveAudio extends LitElement {
       this.timer = duration;
       this.updateTimerDisplay();
       this.part2Topic = '';
-      await this.startRecording();
-      this.speakPart1();
+      await this.startTencentConversation();
     } else if (part === 'part3') {
       await this.loadPart3Questions();
       const duration = this.partDurations[part];
@@ -1182,8 +1181,7 @@ export class GdmLiveAudio extends LitElement {
       if (!this.part2Topic) {
         // still allow Part 3 with generic questions
       }
-      await this.startRecording();
-      this.speakPart3();
+      await this.startTencentConversation();
     } else {
       const duration = this.partDurations[part];
       this.timer = duration;
@@ -1487,10 +1485,57 @@ export class GdmLiveAudio extends LitElement {
   }
   private toggleRecording() {
     if (this.isRecording) {
-      this.stopRecording();
+      this.stopTencentConversation();
     } else {
-      this.startRecording();
+      this.startTencentConversation();
     }
+  }
+
+  private async startTencentConversation() {
+    if (this.isRecording || !this.selectedPart) return;
+    try {
+      const payload: any = {
+        // Fill these with your TRTC parameters
+        // Example keys; adapt per your Tencent setup
+        RoomId: process.env.TENCENT_ROOM_ID || undefined,
+        UserId: process.env.TENCENT_USER_ID || undefined,
+        AgentId: process.env.TENCENT_AGENT_ID || undefined,
+        // You can pass more fields from UI if needed
+      };
+      await fetch('/api/trtc/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      this.isRecording = true;
+      this.updateStatus('Conversation started with Tencent RTC AI.');
+      this.startTimer();
+    } catch (e) {
+      console.error('TRTC start error', e);
+      this.updateError('Failed to start Tencent conversation');
+      this.isRecording = false;
+    }
+  }
+
+  private async stopTencentConversation() {
+    if (!this.isRecording) return;
+    try {
+      const payload: any = {
+        RoomId: process.env.TENCENT_ROOM_ID || undefined,
+        UserId: process.env.TENCENT_USER_ID || undefined,
+        AgentId: process.env.TENCENT_AGENT_ID || undefined,
+      };
+      await fetch('/api/trtc/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      console.warn('TRTC stop error', e);
+    }
+    this.isRecording = false;
+    this.stopTimer();
+    this.updateStatus('Conversation stopped.');
   }
 
   private async getAndSaveScore() {

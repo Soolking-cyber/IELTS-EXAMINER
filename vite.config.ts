@@ -11,6 +11,13 @@ export default defineConfig(({ mode }) => {
         'process.env.SUPABASE_ANON_KEY': JSON.stringify(env.SUPABASE_ANON_KEY),
         'process.env.STT_URL': JSON.stringify(env.STT_URL),
         'process.env.SITE_URL': JSON.stringify(env.SITE_URL),
+        'process.env.TENCENT_SECRET_ID': JSON.stringify(env.TENCENT_SECRET_ID),
+        'process.env.TENCENT_SECRET_KEY': JSON.stringify(env.TENCENT_SECRET_KEY),
+        'process.env.TENCENT_REGION': JSON.stringify(env.TENCENT_REGION),
+        'process.env.TENCENT_SDK_APP_ID': JSON.stringify(env.TENCENT_SDK_APP_ID),
+        'process.env.TENCENT_ROOM_ID': JSON.stringify(env.TENCENT_ROOM_ID),
+        'process.env.TENCENT_USER_ID': JSON.stringify(env.TENCENT_USER_ID),
+        'process.env.TENCENT_AGENT_ID': JSON.stringify(env.TENCENT_AGENT_ID),
       },
       resolve: {
         alias: {

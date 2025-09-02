@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "tencentcloud-sdk-nodejs-trtc": "^4.0.890",
     "@google/genai": "^0.9.0",
     "@lit/context": "^1.1.5",
     "@supabase/supabase-js": "^2.47.10",
