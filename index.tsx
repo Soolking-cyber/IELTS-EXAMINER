@@ -114,15 +114,17 @@ export class GdmLiveAudio extends LitElement {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
       if (existing) return resolve();
       const s = document.createElement('script');
-      s.src = src; s.async = true; s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load ' + src));
+      s.src = src; s.async = true; s.crossOrigin = 'anonymous'; (s as any).referrerPolicy = 'no-referrer';
+      s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load ' + src));
       document.head.appendChild(s);
     });
   }
   private async getTrtcSdk(): Promise<any> {
     if ((window as any).TRTC?.create) return (window as any).TRTC;
     // Prefer local vendored SDK, then fallback to official CDN
-    const localUrl = '/trtc.js';
-    const officialUrl = 'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js';
+    const bust = `v=${Date.now()}`;
+    const localUrl = `/trtc.js?${bust}`;
+    const officialUrl = `https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js?${bust}`;
     try {
       await this.loadScript(localUrl);
       if ((window as any).TRTC?.create) return (window as any).TRTC;
