@@ -15,9 +15,9 @@ class LibGenerateTestUserSig {
   genTestUserSig(userId) {
     const current = Math.floor(Date.now() / 1000);
     const expire = this.expireTime;
-    
+
     // Create signature content exactly like Tencent's client library
-    const contentToBeSigned = 
+    const contentToBeSigned =
       'TLS.identifier:' + userId + '\n' +
       'TLS.sdkappid:' + this.sdkAppId + '\n' +
       'TLS.time:' + current + '\n' +
@@ -41,7 +41,7 @@ class LibGenerateTestUserSig {
     // Compress and encode like the original library
     const jsonStr = JSON.stringify(sigDoc);
     const compressed = zlib.deflateSync(Buffer.from(jsonStr, 'utf8'));
-    
+
     return compressed.toString('base64')
       .replace(/\+/g, '*')
       .replace(/\//g, '-')
@@ -81,7 +81,7 @@ export default async function handler(req, res) {
     }
     const { userId, expire = 86400 } = req.body || {};
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    
+
     // Use the exact format from your client-side code
     const result = genTestUserSig({
       sdkAppId: sdkAppId,
@@ -89,7 +89,7 @@ export default async function handler(req, res) {
       sdkSecretKey: secretKey
     });
     const userSig = result.userSig;
-    
+
     // Debug logging (remove in production)
     console.log('UserSig generation:', {
       sdkAppId,
@@ -101,7 +101,7 @@ export default async function handler(req, res) {
       secretKeyPrefix: secretKey.substring(0, 8),
       secretKeySuffix: secretKey.substring(secretKey.length - 8)
     });
-    
+
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({ sdkAppId, userId, userSig, expire });
   } catch (e) {
