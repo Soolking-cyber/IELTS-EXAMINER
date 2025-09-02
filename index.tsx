@@ -119,8 +119,8 @@ export class GdmLiveAudio extends LitElement {
     // Try multiple CDN sources for better reliability
     const cdnUrls = [
       'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js',
-      'https://cdn.jsdelivr.net/npm/trtc-sdk-v5/dist/trtc.min.js',
-      'https://unpkg.com/trtc-sdk-v5/dist/trtc.min.js'
+      'https://cdn.jsdelivr.net/npm/trtc-js-sdk@4.15.0/dist/trtc.js',
+      'https://unpkg.com/trtc-js-sdk@4.15.0/dist/trtc.js'
     ];
     
     for (const url of cdnUrls) {
@@ -1537,7 +1537,16 @@ export class GdmLiveAudio extends LitElement {
       trtc.on(TRTCsdk.EVENT.REMOTE_AUDIO_AVAILABLE, (event: any) => {
         try { trtc.muteRemoteAudio(event.userId, false); } catch {}
       });
-      await trtc.enterRoom({ sdkAppId, userId, userSig, roomId });
+      // Ensure proper data types for TRTC
+      const enterRoomParams = {
+        sdkAppId: Number(sdkAppId),
+        userId: String(userId),
+        userSig: String(userSig),
+        roomId: Number(roomId)
+      };
+      
+      console.log('TRTC enterRoom params:', enterRoomParams);
+      await trtc.enterRoom(enterRoomParams);
       await trtc.startLocalAudio();
       // Notify backend to start AI conversation with questions/cues
       const startPayload: any = { RoomId: roomId, UserId: userId, AgentId: (this.trtcAgentId || process.env.TENCENT_AGENT_ID || undefined) };
@@ -1554,8 +1563,20 @@ export class GdmLiveAudio extends LitElement {
     } catch (e) {
       console.error('TRTC start error', e);
       
+      // Detailed error logging for debugging
+      if (e.code === -100006) {
+        console.error('TRTC Error -100006: Check privilege failed');
+        console.error('This usually means invalid UserSig or credentials');
+        this.updateStatus('TRTC authentication failed - check credentials');
+      } else if (e.message?.includes('SDK')) {
+        console.error('TRTC SDK loading failed');
+        this.updateStatus('TRTC SDK failed to load - check network connection');
+      } else {
+        this.updateStatus(`TRTC error: ${e.message || e.code || 'Unknown error'}`);
+      }
+      
       // Fallback to regular audio recording if TRTC fails
-      this.updateStatus('TRTC unavailable, using standard audio recording...');
+      console.log('Falling back to standard audio recording...');
       
       try {
         // Fallback: Start speech recognition and timer without TRTC
