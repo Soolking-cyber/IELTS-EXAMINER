@@ -1558,9 +1558,11 @@ export class GdmLiveAudio extends LitElement {
       this.updateStatus('TRTC unavailable, using standard audio recording...');
       
       try {
-        // Start regular audio recording as fallback
-        await this.startRecording();
-        this.updateStatus('Recording started (fallback mode)');
+        // Fallback: Start speech recognition and timer without TRTC
+        this.startSpeechRecognition();
+        this.isRecording = true;
+        this.startTimer();
+        this.updateStatus('Recording started (fallback mode - speech recognition only)');
       } catch (fallbackError) {
         console.error('Fallback recording failed:', fallbackError);
         this.updateError('Failed to start any recording method');
