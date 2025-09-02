@@ -101,6 +101,8 @@ export class GdmLiveAudio extends LitElement {
   private mediaRecorder: MediaRecorder | null = null;
   private startingRecording = false;
   private trtc: any = null;
+  session: any;
+  liveLines: any;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -862,6 +864,9 @@ export class GdmLiveAudio extends LitElement {
   private async ensureSession() {
     if (!this.session) await this.initSession();
   }
+  initSession() {
+    throw new Error('Method not implemented.');
+  }
 
   private cancelSpeaking() {
     this.speakCancel = true;
@@ -1487,6 +1492,9 @@ export class GdmLiveAudio extends LitElement {
     this.initialPrompt = null;
     this.currentTranscript = [];
     this.updateStatus('Session cleared.');
+  }
+  stopRecording() {
+    throw new Error('Method not implemented.');
   }
 
   private renderHistoryList() {
