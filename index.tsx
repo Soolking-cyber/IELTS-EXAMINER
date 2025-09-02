@@ -115,8 +115,27 @@ export class GdmLiveAudio extends LitElement {
   }
   private async getTrtcSdk(): Promise<any> {
     if ((window as any).TRTC?.create) return (window as any).TRTC;
-    await this.loadScript('https://cdn.jsdelivr.net/npm/trtc-sdk-v5/dist/trtc.min.js');
-    return (window as any).TRTC;
+    
+    // Try multiple CDN sources for better reliability
+    const cdnUrls = [
+      'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js',
+      'https://cdn.jsdelivr.net/npm/trtc-sdk-v5/dist/trtc.min.js',
+      'https://unpkg.com/trtc-sdk-v5/dist/trtc.min.js'
+    ];
+    
+    for (const url of cdnUrls) {
+      try {
+        await this.loadScript(url);
+        if ((window as any).TRTC?.create) {
+          return (window as any).TRTC;
+        }
+      } catch (error) {
+        console.warn(`Failed to load TRTC from ${url}:`, error);
+        continue;
+      }
+    }
+    
+    throw new Error('Failed to load TRTC SDK from all CDN sources');
   }
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
@@ -863,6 +882,8 @@ export class GdmLiveAudio extends LitElement {
   private renderTencentDemo() {
     if (!this.showTencentAIDemo) return '';
     
+    const isCompatible = this.checkBrowserCompatibility();
+    
     return html`
       <div class="tencent-demo-overlay">
         <div class="demo-header">
@@ -871,17 +892,28 @@ export class GdmLiveAudio extends LitElement {
         </div>
         <div class="demo-content">
           <div style="padding: 20px; text-align: center; color: #fff;">
-            <h3>Tencent AI Integration Ready!</h3>
+            <h3>Tencent AI Integration Status</h3>
+            
+            ${!isCompatible ? html`
+              <div style="background: #cc3300; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                <h4>⚠️ Browser Compatibility Issue</h4>
+                <p>TRTC requires a modern browser with WebRTC support.</p>
+                <p><strong>Recommended browsers:</strong> Chrome 56+, Firefox 44+, Safari 11+</p>
+                <p>The app will fallback to standard audio recording.</p>
+              </div>
+            ` : ''}
+            
             <p>The Tencent AI conversation system has been integrated into your IELTS app.</p>
             <p>Key features implemented:</p>
             <ul style="text-align: left; max-width: 500px; margin: 20px auto;">
-              <li>✅ TRTC SDK Integration</li>
+              <li>${isCompatible ? '✅' : '⚠️'} TRTC SDK Integration</li>
               <li>✅ UserSig Generation (Fixed)</li>
-              <li>✅ Real-time Audio Communication</li>
+              <li>${isCompatible ? '✅' : '⚠️'} Real-time Audio Communication</li>
               <li>✅ AI Conversation API</li>
               <li>✅ Speech-to-Text (Deepgram)</li>
               <li>✅ Text-to-Speech (Cartesia)</li>
               <li>✅ LLM Integration (Dify)</li>
+              <li>✅ Fallback Audio Recording</li>
             </ul>
             <p>The integration is now ready for testing within your IELTS speaking test parts.</p>
             <button 
@@ -894,6 +926,14 @@ export class GdmLiveAudio extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  private checkBrowserCompatibility(): boolean {
+    // Check for WebRTC support
+    const hasWebRTC = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    const hasRTCPeerConnection = !!(window.RTCPeerConnection || (window as any).webkitRTCPeerConnection);
+    
+    return hasWebRTC && hasRTCPeerConnection;
   }
 
   // Guest mode removed
@@ -1474,7 +1514,19 @@ export class GdmLiveAudio extends LitElement {
       if (!sigRes.ok) throw new Error(await sigRes.text());
       const { sdkAppId, userSig } = await sigRes.json();
       const TRTCsdk: any = await this.getTrtcSdk();
-      if (!TRTCsdk?.isSupported?.()) throw new Error('TRTC not supported in this browser');
+      
+      // Check browser compatibility
+      if (!TRTCsdk) {
+        throw new Error('TRTC SDK failed to load');
+      }
+      
+      if (typeof TRTCsdk.isSupported === 'function' && !TRTCsdk.isSupported()) {
+        throw new Error('TRTC not supported in this browser. Please use Chrome, Firefox, or Safari.');
+      }
+      
+      if (!TRTCsdk.create) {
+        throw new Error('TRTC SDK loaded but create method not available');
+      }
       const trtc = TRTCsdk.create();
       // Handle kicks
       trtc.on(TRTCsdk.EVENT.KICKED_OUT, (err: any) => {
@@ -1501,8 +1553,19 @@ export class GdmLiveAudio extends LitElement {
       this.startTimer();
     } catch (e) {
       console.error('TRTC start error', e);
-      this.updateError('Failed to start Tencent conversation');
-      this.isRecording = false;
+      
+      // Fallback to regular audio recording if TRTC fails
+      this.updateStatus('TRTC unavailable, using standard audio recording...');
+      
+      try {
+        // Start regular audio recording as fallback
+        await this.startRecording();
+        this.updateStatus('Recording started (fallback mode)');
+      } catch (fallbackError) {
+        console.error('Fallback recording failed:', fallbackError);
+        this.updateError('Failed to start any recording method');
+        this.isRecording = false;
+      }
     }
   }
 
