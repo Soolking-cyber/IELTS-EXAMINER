@@ -1494,19 +1494,35 @@ export class GdmLiveAudio extends LitElement {
   private async startTencentConversation() {
     if (this.isRecording || !this.selectedPart) return;
     try {
-      const payload: any = {
-        // Fill these with your TRTC parameters
-        // Example keys; adapt per your Tencent setup
-        RoomId: process.env.TENCENT_ROOM_ID || undefined,
-        UserId: process.env.TENCENT_USER_ID || undefined,
-        AgentId: process.env.TENCENT_AGENT_ID || undefined,
-        // You can pass more fields from UI if needed
-      };
-      await fetch('/api/trtc/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      const roomId = Number(process.env.TENCENT_ROOM_ID || 10001);
+      const userId = (process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2, 8)}`);
+      const sigRes = await fetch('/api/trtc/usersig', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId })
       });
+      if (!sigRes.ok) throw new Error(await sigRes.text());
+      const { sdkAppId, userSig } = await sigRes.json();
+      // Lazy import to avoid bundling issues if TRTC not supported
+      const TRTCMod: any = await import('trtc-js-sdk');
+      if (!TRTCMod.default?.checkSystemRequirements?.() && !TRTCMod.checkSystemRequirements?.()) {
+        throw new Error('TRTC not supported in this browser');
+      }
+      const TRTCAny: any = TRTCMod.default || TRTCMod;
+      const client = TRTCAny.createClient({ mode: 'rtc', sdkAppId, userId, userSig });
+      await client.join({ roomId });
+      const track = await TRTCAny.createMicrophoneAudioTrack();
+      await client.publish(track);
+      (client as any).on('stream-added', async (event: any) => {
+        try { await client.subscribe(event.stream, { audio: true, video: false }); } catch {}
+      });
+      (client as any).on('stream-subscribed', (event: any) => {
+        try { event.stream.play(); } catch {}
+      });
+      // Notify backend to start AI conversation
+      await fetch('/api/trtc/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ RoomId: roomId, UserId: userId, AgentId: process.env.TENCENT_AGENT_ID || undefined })
+      });
+      (this as any).trtcClient = client;
+      (this as any).localTrack = track;
       this.isRecording = true;
       this.updateStatus('Conversation started with Tencent RTC AI.');
       this.startTimer();
@@ -1520,19 +1536,19 @@ export class GdmLiveAudio extends LitElement {
   private async stopTencentConversation() {
     if (!this.isRecording) return;
     try {
-      const payload: any = {
-        RoomId: process.env.TENCENT_ROOM_ID || undefined,
-        UserId: process.env.TENCENT_USER_ID || undefined,
-        AgentId: process.env.TENCENT_AGENT_ID || undefined,
-      };
-      await fetch('/api/trtc/stop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-    } catch (e) {
-      console.warn('TRTC stop error', e);
-    }
+      const roomId = Number(process.env.TENCENT_ROOM_ID || 10001);
+      await fetch('/api/trtc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ RoomId: roomId }) });
+    } catch (e) { console.warn('TRTC stop error', e); }
+    try {
+      const client: any = (this as any).trtcClient;
+      const track: any = (this as any).localTrack;
+      if (client) {
+        if (track) { try { await client.unpublish(track); } catch {} try { track.stop(); track.close(); } catch {} }
+        await client.leave();
+      }
+    } catch {}
+    (this as any).trtcClient = null;
+    (this as any).localTrack = null;
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Conversation stopped.');
