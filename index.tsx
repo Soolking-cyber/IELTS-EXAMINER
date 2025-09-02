@@ -61,6 +61,10 @@ export class GdmLiveAudio extends LitElement {
   @state() isProfileVisible = false;
   @state() profileTab: 'profile' | 'history' = 'profile';
   @state() showTencentAIDemo = false;
+  // TRTC health overlay
+  @state() showTrtcHealth = false;
+  @state() trtcHealth: any = null;
+  @state() trtcHealthLoading = false;
   // TRTC runtime configuration
   @state() trtcRoomId: number | null = null;
   @state() trtcUserId: string | null = null;
@@ -115,27 +119,11 @@ export class GdmLiveAudio extends LitElement {
   }
   private async getTrtcSdk(): Promise<any> {
     if ((window as any).TRTC?.create) return (window as any).TRTC;
-    
-    // Try multiple CDN sources for better reliability
-    const cdnUrls = [
-      'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js',
-      'https://cdn.jsdelivr.net/npm/trtc-js-sdk@4.15.0/dist/trtc.js',
-      'https://unpkg.com/trtc-js-sdk@4.15.0/dist/trtc.js'
-    ];
-    
-    for (const url of cdnUrls) {
-      try {
-        await this.loadScript(url);
-        if ((window as any).TRTC?.create) {
-          return (window as any).TRTC;
-        }
-      } catch (error) {
-        console.warn(`Failed to load TRTC from ${url}:`, error);
-        continue;
-      }
-    }
-    
-    throw new Error('Failed to load TRTC SDK from all CDN sources');
+    // Load only the official v5 SDK from Tencent
+    const officialUrl = 'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js';
+    await this.loadScript(officialUrl);
+    if ((window as any).TRTC?.create) return (window as any).TRTC;
+    throw new Error('TRTC SDK failed to load from the official source');
   }
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
@@ -560,6 +548,22 @@ export class GdmLiveAudio extends LitElement {
       transform: translateY(-2px);
     }
 
+    .health-link {
+      position: fixed;
+      bottom: 20px;
+      right: 180px;
+      background: #2c2c2e;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 1000;
+      transition: all 0.2s ease;
+    }
+    .health-link:hover { background: #3a3a3c; transform: translateY(-2px); }
+
     .tencent-demo-overlay {
       position: fixed;
       inset: 0;
@@ -922,6 +926,66 @@ export class GdmLiveAudio extends LitElement {
             >
               Close Demo
             </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // TRTC Health diagnostics
+  private async openTrtcHealth() {
+    this.showTrtcHealth = true;
+    await this.fetchTrtcHealth();
+  }
+  private closeTrtcHealth() { this.showTrtcHealth = false; }
+  private async fetchTrtcHealth() {
+    this.trtcHealthLoading = true;
+    try {
+      const res = await fetch('/api/trtc/health');
+      const json = await res.json();
+      this.trtcHealth = json;
+    } catch (e) {
+      this.trtcHealth = { ok: false, error: String(e) };
+    } finally {
+      this.trtcHealthLoading = false;
+      this.requestUpdate();
+    }
+  }
+  private renderTrtcHealth() {
+    if (!this.showTrtcHealth) return '';
+    const H = this.trtcHealth || {};
+    const ok = !!H.ok;
+    return html`
+      <div class="tencent-demo-overlay">
+        <div class="demo-header">
+          <h2>TRTC Health</h2>
+          <button class="demo-close" @click=${this.closeTrtcHealth}>×</button>
+        </div>
+        <div class="demo-content">
+          <div style="padding: 20px; color: #fff; max-width: 800px; margin: 0 auto;">
+            ${this.trtcHealthLoading ? html`<p>Checking TRTC configuration…</p>` : html`
+              <p>Status: <strong style="color:${ok ? '#7CFC00' : '#ff6666'};">${ok ? 'OK' : 'Issue detected'}</strong></p>
+              <div style="display:grid; grid-template-columns: 260px 1fr; gap:8px; align-items:center;">
+                <div>SDK App ID</div><div>${H.env?.sdkAppId ?? '—'}</div>
+                <div>Has SDK Secret Key</div><div>${H.env?.hasSdkSecretKey ? 'Yes' : 'No'}</div>
+                <div>Cloud API Ready</div><div>${H.checks?.cloudApiReady ? 'Yes' : 'No (skipped)'}</div>
+                <div>UserSig OK</div><div>${H.checks?.userSigOk ? 'Yes' : 'No'}</div>
+                <div>UserSig Length</div><div>${H.checks?.userSigLength ?? 0}</div>
+                <div>Region</div><div>${H.env?.region || '—'}</div>
+              </div>
+              ${Array.isArray(H.messages) && H.messages.length ? html`
+                <div style="margin-top:16px; background:#1a1a1a; padding:12px; border-radius:8px;">
+                  <strong>Messages</strong>
+                  <ul>
+                    ${H.messages.map((m:any) => html`<li>${m}</li>`)}
+                  </ul>
+                </div>
+              ` : ''}
+            `}
+            <div style="margin-top:20px; display:flex; gap:10px;">
+              <button class="demo-link" style="position:static; background:#0066cc;" @click=${() => this.fetchTrtcHealth()}>Recheck</button>
+              <button class="demo-link" style="position:static; background:#333;" @click=${this.closeTrtcHealth}>Close</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2027,7 +2091,11 @@ export class GdmLiveAudio extends LitElement {
       <button class="demo-link" @click=${this.showTencentDemo}>
         🤖 Tencent AI Demo
       </button>
+      <button class="health-link" @click=${this.openTrtcHealth}>
+        🛠 TRTC Health
+      </button>
       ${this.renderTencentDemo()}
+      ${this.renderTrtcHealth()}
     `;
   }
 }

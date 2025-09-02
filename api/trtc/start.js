@@ -10,8 +10,10 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
   try {
     const { TENCENT_SECRET_ID, TENCENT_SECRET_KEY, TENCENT_REGION } = process.env;
+    // Graceful no-op if cloud API creds are not configured
     if (!TENCENT_SECRET_ID || !TENCENT_SECRET_KEY) {
-      return res.status(500).json({ error: 'Missing TENCENT_SECRET_ID/KEY' });
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return res.status(200).json({ ok: true, skipped: true, reason: 'missing_cloud_credentials' });
     }
     const region = TENCENT_REGION || 'ap-singapore';
     const tencentcloud = await import('tencentcloud-sdk-nodejs-trtc');

@@ -115,7 +115,8 @@ export default async function handler(req, res) {
   }
   try {
     const sdkAppId = Number(process.env.TENCENT_SDK_APP_ID);
-    const secretKey = process.env.TENCENT_SDK_SECRET_KEY || process.env.TENCENT_SECRET_KEY;
+    // Important: Only use the TRTC SDK secret. Do NOT fall back to cloud API secret.
+    const secretKey = process.env.TENCENT_SDK_SECRET_KEY;
     if (!sdkAppId || !secretKey) {
       return res.status(500).json({ error: 'Missing TENCENT_SDK_APP_ID or TENCENT_SDK_SECRET_KEY' });
     }
