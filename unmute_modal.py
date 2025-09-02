@@ -74,8 +74,23 @@ def unmute_app():
                 "bash","-lc",
                 "source $HOME/.cargo/env || true; cargo install moshi-server@0.6.3"], check=True, env=env)
 
+    def _child_env():
+        env = os.environ.copy()
+        # Add Python LIBDIR to LD_LIBRARY_PATH (matches vendor start scripts)
+        try:
+            libdir = subprocess.check_output([
+                "python3","-c","import sysconfig; print(sysconfig.get_config_var('LIBDIR') or '')"
+            ], text=True).strip()
+            if libdir:
+                prev = env.get("LD_LIBRARY_PATH", "")
+                env["LD_LIBRARY_PATH"] = f"{libdir}:{prev}" if prev else libdir
+        except Exception:
+            pass
+        return env
+
     @app.on_event("startup")
     async def startup():
+        import asyncio
         ensure_rust()
         ensure_moshi()
         # Copy configs into container path
@@ -84,22 +99,43 @@ def unmute_app():
         src = "/root/project/vendor/unmute/services/moshi-server/configs"
         if os.path.isdir(src):
             subprocess.run(["bash","-lc", f"cp -r {src}/* {CONFIGS_LOCAL}/ || true"], check=False)
-        # Start TTS and STT workers
+        # Start TTS and STT workers with log capture and env
+        tts_log = open("/tmp/moshi-tts.log", "a+")
+        stt_log = open("/tmp/moshi-stt.log", "a+")
+        app.state._tts_log = tts_log
+        app.state._stt_log = stt_log
+        env = _child_env()
         app.state.tts = subprocess.Popen(
             [
                 "bash",
                 "-lc",
                 f"source $HOME/.cargo/env || true; moshi-server worker --config {CONFIGS_LOCAL}/tts.toml --port 8089",
-            ]
+            ],
+            stdout=tts_log,
+            stderr=tts_log,
+            env=env,
         )
         app.state.stt = subprocess.Popen(
             [
                 "bash",
                 "-lc",
                 f"source $HOME/.cargo/env || true; moshi-server worker --config {CONFIGS_LOCAL}/stt.toml --port 8090",
-            ]
+            ],
+            stdout=stt_log,
+            stderr=stt_log,
+            env=env,
         )
-        time.sleep(3)
+        # Wait until workers respond
+        async with httpx.AsyncClient(timeout=5) as client:
+            for _ in range(180):
+                try:
+                    r1 = await client.get("http://127.0.0.1:8089/health")
+                    r2 = await client.get("http://127.0.0.1:8090/health")
+                    if r1.status_code < 500 and r2.status_code < 500:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
 
     @app.on_event("shutdown")
     async def shutdown():
@@ -126,7 +162,7 @@ def unmute_app():
         text = (payload or {}).get("text", "").strip()
         if not text:
             return {"error": "no_text"}, 400
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             try:
                 r = await client.post(
                     "http://127.0.0.1:8089/api/tts_streaming",
@@ -140,6 +176,21 @@ def unmute_app():
                 return {"audio": r.text}
             except Exception as e:
                 return {"error": "tts_failed", "detail": str(e)}, 500
+
+    @app.get("/debug/logs")
+    async def debug_logs():
+        t, s = "", ""
+        try:
+            with open("/tmp/moshi-tts.log", "r") as f:
+                t = f.read()[-5000:]
+        except Exception:
+            pass
+        try:
+            with open("/tmp/moshi-stt.log", "r") as f:
+                s = f.read()[-5000:]
+        except Exception:
+            pass
+        return {"tts": t, "stt": s}
 
     @app.post("/stt")
     async def stt_proxy(audio: bytes = None):
