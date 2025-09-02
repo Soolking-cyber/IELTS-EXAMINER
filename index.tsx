@@ -65,6 +65,7 @@ export class GdmLiveAudio extends LitElement {
   @state() showTrtcHealth = false;
   @state() trtcHealth: any = null;
   @state() trtcHealthLoading = false;
+  @state() maskSensitive = true;
   // TRTC runtime configuration
   @state() trtcRoomId: number | null = null;
   @state() trtcUserId: string | null = null;
@@ -564,6 +565,12 @@ export class GdmLiveAudio extends LitElement {
     }
     .health-link:hover { background: #3a3a3c; transform: translateY(-2px); }
 
+    .footer-status { display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; color:#aaa; }
+    .status-pill { width:10px; height:10px; border-radius:50%; background:#666; display:inline-block; }
+    .status-pill.ok { background:#2ecc71; }
+    .status-pill.bad { background:#e74c3c; }
+    .status-pill.loading { background:#f1c40f; }
+
     .tencent-demo-overlay {
       position: fixed;
       inset: 0;
@@ -838,6 +845,8 @@ export class GdmLiveAudio extends LitElement {
     this.setupAuth();
     this.loadLocalHistory();
     this.loadTrtcConfig();
+    // Auto-check TRTC health on load (does not open overlay)
+    this.fetchTrtcHealth();
   }
 
   private async setupAuth() {
@@ -955,6 +964,12 @@ export class GdmLiveAudio extends LitElement {
     if (!this.showTrtcHealth) return '';
     const H = this.trtcHealth || {};
     const ok = !!H.ok;
+    const maskify = (v: any) => {
+      const s = String(v ?? '');
+      if (!this.maskSensitive || !s) return s || '—';
+      const tail = s.slice(-3);
+      return `${'•'.repeat(Math.max(0, s.length - 3))}${tail}`;
+    };
     return html`
       <div class="tencent-demo-overlay">
         <div class="demo-header">
@@ -965,13 +980,17 @@ export class GdmLiveAudio extends LitElement {
           <div style="padding: 20px; color: #fff; max-width: 800px; margin: 0 auto;">
             ${this.trtcHealthLoading ? html`<p>Checking TRTC configuration…</p>` : html`
               <p>Status: <strong style="color:${ok ? '#7CFC00' : '#ff6666'};">${ok ? 'OK' : 'Issue detected'}</strong></p>
+              <label style="display:inline-flex; align-items:center; gap:8px; margin:8px 0 12px 0; font-size:13px;">
+                <input type="checkbox" .checked=${this.maskSensitive} @change=${(e: any) => { this.maskSensitive = !!e.target.checked; }} />
+                Mask sensitive values
+              </label>
               <div style="display:grid; grid-template-columns: 260px 1fr; gap:8px; align-items:center;">
-                <div>SDK App ID</div><div>${H.env?.sdkAppId ?? '—'}</div>
+                <div>SDK App ID</div><div>${maskify(H.env?.sdkAppId)}</div>
                 <div>Has SDK Secret Key</div><div>${H.env?.hasSdkSecretKey ? 'Yes' : 'No'}</div>
                 <div>Cloud API Ready</div><div>${H.checks?.cloudApiReady ? 'Yes' : 'No (skipped)'}</div>
                 <div>UserSig OK</div><div>${H.checks?.userSigOk ? 'Yes' : 'No'}</div>
                 <div>UserSig Length</div><div>${H.checks?.userSigLength ?? 0}</div>
-                <div>Region</div><div>${H.env?.region || '—'}</div>
+                <div>Region</div><div>${maskify(H.env?.region)}</div>
               </div>
               ${Array.isArray(H.messages) && H.messages.length ? html`
                 <div style="margin-top:16px; background:#1a1a1a; padding:12px; border-radius:8px;">
@@ -1927,6 +1946,10 @@ export class GdmLiveAudio extends LitElement {
             <div style="width: 56px; height: 56px;"></div>
           </div>
           <div id="status">${this.error || this.status}</div>
+          <div class="footer-status" title="TRTC health">
+            <span class="status-pill ${this.trtcHealthLoading ? 'loading' : (this.trtcHealth ? (this.trtcHealth.ok ? 'ok' : 'bad') : 'loading')}"></span>
+            <span>TRTC</span>
+          </div>
           ${this.isRecording ? html`<div style="color:#7ad7ff; font-size:12px;">${this.isTranscribing ? 'Transcribing…' : ''}</div>` : ''}
         </div>
       </div>
@@ -2088,13 +2111,9 @@ export class GdmLiveAudio extends LitElement {
     // Otherwise show the main app.
     return html`
       ${this.renderApp()}
-      <button class="demo-link" @click=${this.showTencentDemo}>
-        🤖 Tencent AI Demo
-      </button>
       <button class="health-link" @click=${this.openTrtcHealth}>
         🛠 TRTC Health
       </button>
-      ${this.renderTencentDemo()}
       ${this.renderTrtcHealth()}
     `;
   }
