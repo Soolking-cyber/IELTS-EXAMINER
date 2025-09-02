@@ -799,8 +799,10 @@ export class GdmLiveAudio extends LitElement {
 
   private async signInWithGoogle() {
     if (!supabase) return;
-    const redirectBase = (process.env.SITE_URL || window.location.origin).replace(/\/$/, '');
-    const redirectTo = `${redirectBase}`;
+    // Use current origin for local development, fallback to SITE_URL for production
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const redirectBase = isLocal ? window.location.origin : (process.env.SITE_URL || window.location.origin);
+    const redirectTo = redirectBase.replace(/\/$/, '');
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo },
@@ -1853,6 +1855,11 @@ export class GdmLiveAudio extends LitElement {
       return this.renderLogin();
     }
     // Otherwise show the main app.
-    return this.renderApp();
+    return html`
+      ${this.renderApp()}
+      <a href="/tencent-demo.html" class="demo-link">
+        🤖 Tencent AI Demo
+      </a>
+    `;
   }
 }

@@ -1,6 +1,34 @@
 export const config = { runtime: 'nodejs', api: { bodyParser: true } };
 
-import { createRequire } from 'module';
+import crypto from 'crypto';
+import { Buffer } from 'buffer';
+
+// Native implementation of UserSig generation
+function genUserSig(sdkAppId, secretKey, userId, expire = 86400) {
+  const current = Math.floor(Date.now() / 1000);
+  const sig = {
+    'TLS.ver': '2.0',
+    'TLS.sdkappid': sdkAppId,
+    'TLS.identifier': userId,
+    'TLS.expire': expire,
+    'TLS.time': current,
+    'TLS.sig': ''
+  };
+
+  const sigStr = 
+    'TLS.identifier:' + sig['TLS.identifier'] + '\n' +
+    'TLS.sdkappid:' + sig['TLS.sdkappid'] + '\n' +
+    'TLS.time:' + sig['TLS.time'] + '\n' +
+    'TLS.expire:' + sig['TLS.expire'] + '\n';
+
+  const hmac = crypto.createHmac('sha256', secretKey);
+  hmac.update(sigStr);
+  sig['TLS.sig'] = hmac.digest('base64');
+
+  const sigDoc = JSON.stringify(sig);
+  const compressed = Buffer.from(sigDoc).toString('base64');
+  return compressed.replace(/\+/g, '*').replace(/\//g, '-').replace(/=/g, '_');
+}
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -18,9 +46,8 @@ export default async function handler(req, res) {
     }
     const { userId, expire = 86400 } = req.body || {};
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    const require = createRequire(import.meta.url);
-    const TLSSigAPIv2 = require('tls-sig-api-v2');
-    const userSig = TLSSigAPIv2.genSig(sdkAppId, secretKey, String(userId), Number(expire));
+    
+    const userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({ sdkAppId, userId, userSig, expire });
   } catch (e) {
