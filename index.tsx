@@ -1192,7 +1192,7 @@ export class GdmLiveAudio extends LitElement {
       this.timer -= 1;
       this.updateTimerDisplay();
       if (this.timer <= 0) {
-        this.stopRecording();
+        this.stopTencentConversation();
       }
     }, 1000);
   }
@@ -1232,7 +1232,7 @@ export class GdmLiveAudio extends LitElement {
           this.timer = 120;
           this.updateTimerDisplay();
         }
-        this.startRecording();
+        this.startTencentConversation();
       }
     }, 1000);
   }
@@ -1245,114 +1245,7 @@ export class GdmLiveAudio extends LitElement {
     this.isPreparing = false;
   }
 
-  private async startRecording() {
-    if (this.isRecording || this.startingRecording || !this.selectedPart || this.isPreparing) {
-      return;
-    }
-    this.startingRecording = true;
-
-    const duration = this.partDurations[this.selectedPart];
-    this.timer = duration;
-    this.updateTimerDisplay();
-
-    if (this.selectedPart === 'part1') {
-      this.initialPrompt = null;
-    } else if (this.selectedPart === 'part3') {
-      this.initialPrompt = this.part2Topic
-        ? `Let's start IELTS Speaking Part 3. The topic for Part 2 was: "${this.part2Topic}"`
-        : `Let's start IELTS Speaking Part 3.`;
-    } else {
-      this.initialPrompt = null;
-    }
-
-    this.inputAudioContext.resume();
-    try { await this.outputAudioContext.resume(); } catch {}
-    this.updateStatus('Requesting microphone access...');
-
-    try {
-      // Mark early to avoid race with repeated clicks
-      this.isRecording = true;
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-
-      this.updateStatus('Microphone access granted. Starting capture...');
-
-      this.sourceNode = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
-      this.sourceNode.connect(this.inputNode);
-
-      // Start MediaRecorder to send chunks to server STT (Modal)
-      const mime = (window as any).MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      if ((window as any).MediaRecorder) {
-        this.mediaRecorder = new MediaRecorder(this.mediaStream, { mimeType: mime });
-        this.mediaRecorder.ondataavailable = (ev: BlobEvent) => {
-          if (!ev.data || ev.data.size < 2048) return; // drop tiny/silent chunks
-          this.transcribeChunk(ev.data);
-        };
-        this.mediaRecorder.onstop = () => { this.mediaRecorder = null; };
-        // Increase STT chunk size to 10s to reduce request volume
-        try { this.mediaRecorder.start(10000); } catch {}
-      }
-
-      this.isRecording = true;
-      
-      this.startTimer();
-      this.updateStatus(''); // Clear status during recording
-    } catch (err) {
-      console.error('Error starting recording:', err);
-      this.updateStatus(`Error: ${err.message}`);
-      this.isRecording = false;
-      this.stopRecording();
-    }
-    this.startingRecording = false;
-  }
-
-  private stopRecording() {
-    if (!this.isRecording && !this.mediaStream && !this.inputAudioContext)
-      return;
-
-    let nextStatus = 'Recording stopped. Select a part to begin again.';
-    if (this.selectedPart === 'part1') {
-      this.part1Completed = true;
-      nextStatus = 'Part 1 complete. Select Part 2 to receive your topic.';
-    } else if (this.selectedPart === 'part2') {
-      this.part2Completed = true;
-      nextStatus = 'Part 2 complete. Select Part 3 to continue the discussion.';
-    } else if (this.selectedPart === 'part3') {
-      this.part3Completed = true;
-    }
-
-    this.updateStatus('Stopping recording...');
-    this.stopTimer();
-    this.stopSpeechRecognition();
-    this.cancelSpeaking();
-    this.stopPreparationTimer();
-    this.isRecording = false;
-
-    if (this.mediaRecorder) {
-      try { this.mediaRecorder.stop(); } catch {}
-      this.mediaRecorder = null;
-    }
-
-    if (this.sourceNode && this.inputAudioContext) {
-      try { this.sourceNode.disconnect(); } catch {}
-    }
-    this.sourceNode = null;
-
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => track.stop());
-      this.mediaStream = null;
-    }
-
-    if (this.part3Completed) {
-      this.getAndSaveScore();
-    } else {
-      this.updateStatus(nextStatus);
-    }
-  }
+  // Removed legacy MediaRecorder-based recording; using TRTC + browser transcription
 
 
 
@@ -1428,12 +1321,16 @@ export class GdmLiveAudio extends LitElement {
       (client as any).on('stream-subscribed', (event: any) => {
         try { event.stream.play(); } catch {}
       });
-      // Notify backend to start AI conversation
-      await fetch('/api/trtc/start', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ RoomId: roomId, UserId: userId, AgentId: process.env.TENCENT_AGENT_ID || undefined })
-      });
+      // Notify backend to start AI conversation with questions/cues
+      const startPayload: any = { RoomId: roomId, UserId: userId, AgentId: process.env.TENCENT_AGENT_ID || undefined };
+      if (this.selectedPart === 'part1') startPayload.Questions = this.part1Set || [];
+      if (this.selectedPart === 'part2') startPayload.CueCard = this.part2Topic || '';
+      if (this.selectedPart === 'part3') { startPayload.Part2Topic = this.part2Topic || ''; startPayload.Questions = this.part3Set || []; }
+      await fetch('/api/trtc/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(startPayload) });
       (this as any).trtcClient = client;
       (this as any).localTrack = track;
+      // Start browser transcription so history works
+      this.startSpeechRecognition();
       this.isRecording = true;
       this.updateStatus('Conversation started with Tencent RTC AI.');
       this.startTimer();
@@ -1460,6 +1357,7 @@ export class GdmLiveAudio extends LitElement {
     } catch {}
     (this as any).trtcClient = null;
     (this as any).localTrack = null;
+    this.stopSpeechRecognition();
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Conversation stopped.');
