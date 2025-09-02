@@ -120,11 +120,19 @@ export class GdmLiveAudio extends LitElement {
   }
   private async getTrtcSdk(): Promise<any> {
     if ((window as any).TRTC?.create) return (window as any).TRTC;
-    // Load only the official v5 SDK from Tencent
+    // Prefer local vendored SDK, then fallback to official CDN
+    const localUrl = '/trtc.js';
     const officialUrl = 'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js';
+    try {
+      await this.loadScript(localUrl);
+      if ((window as any).TRTC?.create) return (window as any).TRTC;
+      console.warn('Local TRTC not initialized after load; trying CDN');
+    } catch (e) {
+      console.warn('Failed to load local TRTC SDK:', e);
+    }
     await this.loadScript(officialUrl);
     if ((window as any).TRTC?.create) return (window as any).TRTC;
-    throw new Error('TRTC SDK failed to load from the official source');
+    throw new Error('TRTC SDK failed to load from local or official source');
   }
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
