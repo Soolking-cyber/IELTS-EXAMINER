@@ -1645,33 +1645,17 @@ export class GdmLiveAudio extends LitElement {
       this.startTimer();
     } catch (e) {
       console.error('TRTC start error', e);
-      
-      // Detailed error logging for debugging
-      if (e.code === -100006) {
+      // No fallback: fail fast with clear guidance
+      if ((e as any)?.code === -100006) {
         console.error('TRTC Error -100006: Check privilege failed');
-        console.error('This usually means invalid UserSig or credentials');
-        this.updateStatus('TRTC authentication failed - check credentials');
-      } else if (e.message?.includes('SDK')) {
-        console.error('TRTC SDK loading failed');
-        this.updateStatus('TRTC SDK failed to load - check network connection');
+        this.updateStatus('TRTC auth failed (-100006). Open TRTC Health and whitelist this domain.');
+      } else if ((e as any)?.message?.includes('SDK')) {
+        this.updateStatus('TRTC SDK failed to load. Check network/CSP to web.sdk.qcloud.com');
       } else {
-        this.updateStatus(`TRTC error: ${e.message || e.code || 'Unknown error'}`);
+        this.updateStatus(`TRTC error: ${(e as any)?.message || (e as any)?.code || 'Unknown error'}`);
       }
-      
-      // Fallback to regular audio recording if TRTC fails
-      console.log('Falling back to standard audio recording...');
-      
-      try {
-        // Fallback: Start speech recognition and timer without TRTC
-        this.startSpeechRecognition();
-        this.isRecording = true;
-        this.startTimer();
-        this.updateStatus('Recording started (fallback mode - speech recognition only)');
-      } catch (fallbackError) {
-        console.error('Fallback recording failed:', fallbackError);
-        this.updateError('Failed to start any recording method');
-        this.isRecording = false;
-      }
+      this.isRecording = false;
+      this.stopTimer();
     }
   }
 
