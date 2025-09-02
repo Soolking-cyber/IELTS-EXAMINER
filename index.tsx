@@ -1626,9 +1626,25 @@ export class GdmLiveAudio extends LitElement {
         console.error('Kicked from TRTC room', err);
         this.stopTencentConversation();
       });
-      // Optional: handle remote audio available
+      // Handle remote audio available and ensure playback
       trtc.on(TRTCsdk.EVENT.REMOTE_AUDIO_AVAILABLE, (event: any) => {
-        try { trtc.muteRemoteAudio(event.userId, false); } catch {}
+        try {
+          console.log('TRTC remote audio available for', event.userId);
+          if (typeof trtc.startRemoteAudio === 'function') {
+            try { trtc.startRemoteAudio(event.userId); } catch {}
+          }
+          try { trtc.muteRemoteAudio(event.userId, false); } catch {}
+        } catch {}
+      });
+      // Handle remote user enter to proactively unmute
+      trtc.on(TRTCsdk.EVENT.REMOTE_USER_ENTER, (event: any) => {
+        try {
+          console.log('TRTC remote user enter', event.userId);
+          if (typeof trtc.startRemoteAudio === 'function') {
+            try { trtc.startRemoteAudio(event.userId); } catch {}
+          }
+          try { trtc.muteRemoteAudio(event.userId, false); } catch {}
+        } catch {}
       });
       // Ensure proper data types for TRTC
       const enterRoomParams = {
@@ -1646,7 +1662,13 @@ export class GdmLiveAudio extends LitElement {
       if (this.selectedPart === 'part1') startPayload.Questions = this.part1Set || [];
       if (this.selectedPart === 'part2') startPayload.CueCard = this.part2Topic || '';
       if (this.selectedPart === 'part3') { startPayload.Part2Topic = this.part2Topic || ''; startPayload.Questions = this.part3Set || []; }
-      await fetch('/api/trtc/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(startPayload) });
+      const startRes = await fetch('/api/trtc/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(startPayload) });
+      if (!startRes.ok) {
+        let errTxt = '';
+        try { errTxt = await startRes.text(); } catch {}
+        console.error('StartAIConversation failed', startRes.status, errTxt);
+        this.updateStatus('AI conversation start failed. Check cloud credentials/AgentId.');
+      }
       (this as any).trtc = trtc;
       // Start browser transcription so history works
       this.startSpeechRecognition();
