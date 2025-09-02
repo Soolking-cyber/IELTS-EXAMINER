@@ -3,28 +3,31 @@ export const config = { runtime: 'nodejs', api: { bodyParser: true } };
 import crypto from 'crypto';
 import { Buffer } from 'buffer';
 
+// Try to use the official TLS-SIG-API-V2 library if available
+let TLSSigAPIv2;
+try {
+  TLSSigAPIv2 = require('tls-sig-api-v2');
+} catch (e) {
+  console.log('TLS-SIG-API-V2 not available, using manual implementation');
+}
+
 // Correct UserSig generation following Tencent's official algorithm
 function genUserSig(sdkAppId, secretKey, userId, expire = 86400) {
   const current = Math.floor(Date.now() / 1000);
   
-  // Create the signature object
+  // Create the signature object with correct format
   const sigObj = {
     'TLS.ver': '2.0',
-    'TLS.sdkappid': sdkAppId,
+    'TLS.sdkappid': parseInt(sdkAppId),
     'TLS.identifier': userId,
-    'TLS.expire': expire,
+    'TLS.expire': parseInt(expire),
     'TLS.time': current
   };
 
-  // Create the string to sign (order matters!)
-  const sigStr = [
-    'TLS.identifier:' + userId,
-    'TLS.sdkappid:' + sdkAppId,
-    'TLS.time:' + current,
-    'TLS.expire:' + expire
-  ].join('\n') + '\n';
+  // Create the string to sign following Tencent's exact format
+  const sigStr = `TLS.identifier:${userId}\nTLS.sdkappid:${sdkAppId}\nTLS.time:${current}\nTLS.expire:${expire}\n`;
 
-  // Generate HMAC-SHA256 signature
+  // Generate HMAC-SHA256 signature using the secret key
   const hmac = crypto.createHmac('sha256', secretKey);
   hmac.update(sigStr, 'utf8');
   const signature = hmac.digest('base64');
@@ -32,12 +35,11 @@ function genUserSig(sdkAppId, secretKey, userId, expire = 86400) {
   // Add signature to object
   sigObj['TLS.sig'] = signature;
 
-  // Convert to JSON and then base64
+  // Convert to JSON and then base64 - no URL encoding needed
   const jsonStr = JSON.stringify(sigObj);
   const base64Str = Buffer.from(jsonStr, 'utf8').toString('base64');
   
-  // URL-safe base64 encoding
-  return base64Str.replace(/\+/g, '*').replace(/\//g, '-').replace(/=/g, '_');
+  return base64Str;
 }
 
 export default async function handler(req, res) {
@@ -57,7 +59,21 @@ export default async function handler(req, res) {
     const { userId, expire = 86400 } = req.body || {};
     if (!userId) return res.status(400).json({ error: 'userId required' });
     
-    const userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
+    let userSig;
+    
+    // Try using official library first
+    if (TLSSigAPIv2) {
+      try {
+        const api = new TLSSigAPIv2.Api(sdkAppId, secretKey);
+        userSig = api.genUserSig(String(userId), Number(expire));
+        console.log('Using official TLS-SIG-API-V2 library');
+      } catch (e) {
+        console.log('Official library failed, falling back to manual implementation:', e.message);
+        userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
+      }
+    } else {
+      userSig = genUserSig(sdkAppId, secretKey, String(userId), Number(expire));
+    }
     
     // Debug logging (remove in production)
     console.log('UserSig generation:', {
@@ -65,7 +81,8 @@ export default async function handler(req, res) {
       userId: String(userId),
       expire: Number(expire),
       secretKeyLength: secretKey.length,
-      userSigLength: userSig.length
+      userSigLength: userSig.length,
+      method: TLSSigAPIv2 ? 'official-library' : 'manual'
     });
     
     res.setHeader('Access-Control-Allow-Origin', '*');

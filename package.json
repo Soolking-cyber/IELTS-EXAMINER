@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "local:vercel": "vercel dev --confirm"
+    "local:vercel": "vercel dev --confirm",
+    "test:usersig": "node test-usersig.js"
   },
   "dependencies": {
     "tencentcloud-sdk-nodejs-trtc": "^4.0.890",
     "tls-sig-api-v2": "^1.0.2",
+    "trtc-js-sdk": "^4.15.0",
     "@lit/context": "^1.1.5",
     "@supabase/supabase-js": "^2.47.10",
     "firebase": "^12.2.0",
@@ -21,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "dotenv": "^16.0.0"
   }
 }
