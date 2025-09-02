@@ -1,8 +1,10 @@
-export const config = { runtime: 'nodejs', api: { bodyParser: false } };
+module.exports.config = { runtime: 'nodejs', api: { bodyParser: false } };
 
-import crypto from 'crypto';
-import zlib from 'zlib';
-import { Buffer } from 'buffer';
+const path = require('path');
+require('dotenv').config({ path: path.resolve(process.cwd(), '.env.local') });
+const crypto = require('crypto');
+const zlib = require('zlib');
+const { Buffer } = require('buffer');
 
 // Minimal base64url helpers compatible with Tencent format
 const base64url = {
@@ -38,7 +40,7 @@ class TencentApi {
   }
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -85,3 +87,4 @@ export default async function handler(req, res) {
   }
 }
 
+module.exports = handler;

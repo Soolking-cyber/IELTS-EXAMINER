@@ -1,8 +1,10 @@
-export const config = { runtime: 'nodejs', api: { bodyParser: true } };
+module.exports.config = { runtime: 'nodejs', api: { bodyParser: true } };
 
-import crypto from 'crypto';
-import { Buffer } from 'buffer';
-import zlib from 'zlib';
+const path = require('path');
+require('dotenv').config({ path: path.resolve(process.cwd(), '.env.local') });
+const crypto = require('crypto');
+const { Buffer } = require('buffer');
+const zlib = require('zlib');
 
 // Base64URL utilities (exact from Tencent's official code)
 const base64url = {};
@@ -101,7 +103,7 @@ function genTestUserSig({ sdkAppId, userId, sdkSecretKey }) {
   };
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -154,3 +156,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'usersig_error', message: e?.message || String(e) });
   }
 }
+
+module.exports = handler;
