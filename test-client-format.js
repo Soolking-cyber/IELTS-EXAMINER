@@ -1,8 +1,23 @@
-export const config = { runtime: 'nodejs', api: { bodyParser: true } };
-
+import fs from 'fs';
 import crypto from 'crypto';
-import { Buffer } from 'buffer';
 import zlib from 'zlib';
+
+// Read environment variables
+const envContent = fs.readFileSync('.env.local', 'utf8');
+const envVars = {};
+envContent.split('\n').forEach(line => {
+  const [key, ...valueParts] = line.split('=');
+  if (key && valueParts.length > 0) {
+    envVars[key.trim()] = valueParts.join('=').trim();
+  }
+});
+
+const sdkAppId = parseInt(envVars.TENCENT_SDK_APP_ID);
+const secretKey = envVars.TENCENT_SDK_SECRET_KEY;
+
+console.log('Testing Client-Side Format...');
+console.log('SDK App ID:', sdkAppId);
+console.log('Secret Key:', secretKey ? `${secretKey.substring(0, 8)}...${secretKey.substring(secretKey.length - 8)}` : 'NOT SET');
 
 // LibGenerateTestUserSig equivalent implementation
 class LibGenerateTestUserSig {
@@ -23,10 +38,15 @@ class LibGenerateTestUserSig {
       'TLS.time:' + current + '\n' +
       'TLS.expire:' + expire + '\n';
 
+    console.log('Content to be signed:');
+    console.log(contentToBeSigned);
+
     // HMAC-SHA256 signature
     const hmac = crypto.createHmac('sha256', this.secretKey);
     hmac.update(contentToBeSigned, 'utf8');
     const signature = hmac.digest('base64');
+
+    console.log('Signature:', signature);
 
     // Create the signature document
     const sigDoc = {
@@ -37,6 +57,8 @@ class LibGenerateTestUserSig {
       'TLS.time': current,
       'TLS.sig': signature
     };
+
+    console.log('Signature document:', JSON.stringify(sigDoc, null, 2));
 
     // Compress and encode like the original library
     const jsonStr = JSON.stringify(sigDoc);
@@ -65,47 +87,31 @@ function genTestUserSig({ sdkAppId, userId, sdkSecretKey }) {
   };
 }
 
-export default async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    return res.status(200).end();
-  }
-  if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
-  try {
-    const sdkAppId = Number(process.env.TENCENT_SDK_APP_ID);
-    const secretKey = process.env.TENCENT_SDK_SECRET_KEY || process.env.TENCENT_SECRET_KEY;
-    if (!sdkAppId || !secretKey) {
-      return res.status(500).json({ error: 'Missing TENCENT_SDK_APP_ID or TENCENT_SDK_SECRET_KEY' });
-    }
-    const { userId, expire = 86400 } = req.body || {};
-    if (!userId) return res.status(400).json({ error: 'userId required' });
-    
-    // Use the exact format from your client-side code
-    const result = genTestUserSig({
-      sdkAppId: sdkAppId,
-      userId: String(userId),
-      sdkSecretKey: secretKey
-    });
-    const userSig = result.userSig;
-    
-    // Debug logging (remove in production)
-    console.log('UserSig generation:', {
-      sdkAppId,
-      userId: String(userId),
-      expire: Number(expire),
-      secretKeyLength: secretKey.length,
-      userSigLength: userSig.length,
-      method: 'tencent-hmac-sha256',
-      secretKeyPrefix: secretKey.substring(0, 8),
-      secretKeySuffix: secretKey.substring(secretKey.length - 8)
-    });
-    
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    return res.status(200).json({ sdkAppId, userId, userSig, expire });
-  } catch (e) {
-    console.error('TRTC UserSig error', e);
-    return res.status(500).json({ error: 'usersig_error', message: e?.message || String(e) });
-  }
+// Test the implementation
+const userId = 'test-client-format';
+const result = genTestUserSig({
+  sdkAppId: sdkAppId,
+  userId: userId,
+  sdkSecretKey: secretKey
+});
+
+console.log('\n✅ Generated Result:');
+console.log('SDK App ID:', result.sdkAppId);
+console.log('UserSig:', result.userSig);
+console.log('UserSig Length:', result.userSig.length);
+
+// Test decompression
+try {
+  const base64Restored = result.userSig
+    .replace(/\*/g, '+')
+    .replace(/-/g, '/')
+    .replace(/_/g, '=');
+  
+  const decompressed = zlib.inflateSync(Buffer.from(base64Restored, 'base64'));
+  const decoded = JSON.parse(decompressed.toString('utf8'));
+  
+  console.log('\n✅ Decompressed successfully:');
+  console.log(JSON.stringify(decoded, null, 2));
+} catch (e) {
+  console.log('\n❌ Failed to decompress:', e.message);
 }
