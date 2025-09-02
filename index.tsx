@@ -1374,7 +1374,8 @@ export class GdmLiveAudio extends LitElement {
           if (!ev.data || ev.data.size === 0) return;
           this.transcribeChunk(ev.data);
         };
-        try { this.mediaRecorder.start(5000); } catch {}
+        // Reduce STT chunk size from 5s to 2s for lower latency
+        try { this.mediaRecorder.start(2000); } catch {}
       }
 
       this.isRecording = true;
