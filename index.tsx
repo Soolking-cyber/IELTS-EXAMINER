@@ -969,15 +969,20 @@ export class GdmLiveAudio extends LitElement {
         });
         if (!res.ok) {
           try { console.warn('TTS error', res.status, await res.text()); } catch {}
+          await this.speakLinesWithGemini([line]);
           continue;
         }
         const data = await res.json();
         const b64 = data.audio || data.wav || data.data;
         const mime = data.mimeType || data.mimetype || 'audio/wav';
-        if (!b64) continue;
+        if (!b64) {
+          await this.speakLinesWithGemini([line]);
+          continue;
+        }
         await this.playTtsBase64(b64, mime);
       } catch (e) {
         console.warn('TTS fetch failed', e);
+        await this.speakLinesWithGemini([line]);
       }
       if (this.speakCancel) break;
       await new Promise((r) => setTimeout(r, 100));
