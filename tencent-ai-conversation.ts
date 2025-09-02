@@ -2,69 +2,69 @@ import { LitElement, css, html } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 
 interface ChatMessage {
-  id: string;
-  content: string;
-  sender: string;
-  type: 'ai' | 'user';
-  end?: boolean;
+    id: string;
+    content: string;
+    sender: string;
+    type: 'ai' | 'user';
+    end?: boolean;
 }
 
 @customElement('tencent-ai-conversation')
 export class TencentAIConversation extends LitElement {
-  @state() private messageList: ChatMessage[] = [];
-  @state() private taskId: string | null = null;
-  @state() private trtcClient: any = null;
-  @state() private isConnected = false;
-  @state() private isStarting = false;
-  @state() private roomId = Math.floor(Math.random() * 90000) + 10000;
+    @state() private messageList: ChatMessage[] = [];
+    @state() private taskId: string | null = null;
+    @state() private trtcClient: any = null;
+    @state() private conversationActive = false;
+    @state() private isStarting = false;
+    @state() private roomId = Math.floor(Math.random() * 90000) + 10000;
 
-  // Configuration from your existing setup
-  private chatConfig = {
-    SdkAppId: 20026991,
-    AgentConfig: {
-      UserId: "robot_id",
-      UserSig: "", // Will be generated
-      TargetUserId: "12096",
-      WelcomeMessage: "Welcome to IELTS Speaking Test!",
-      InterruptMode: 0,
-      InterruptSpeechDuration: 1000
-    },
-    STTConfig: {
-      Language: "en",
-      VadSilenceTime: 1000,
-      CustomParam: JSON.stringify({
-        STTType: "deepgram",
-        Model: "nova-3",
-        ApiKey: "6f851cb6c7b34c0abeeaa42fe9dd651e48d3bceb"
-      })
-    },
-    LLMConfig: JSON.stringify({
-      LLMType: "dify",
-      APIUrl: "https://api.dify.ai/v1/chat-messages",
-      APIKey: "app-vmQTPOXtg1a7gIwOvZr1mt6D",
-      Timeout: 5,
-      User: "11775",
-      Inputs: {},
-      Model: null,
-      Streaming: true
-    }),
-    TTSConfig: JSON.stringify({
-      TTSType: "cartesia",
-      Model: "sonic-english",
-      APIKey: "sk_car_uUgWA7GoX1SQrwxntQ3zhB",
-      VoiceId: "e8e5fffb-252c-436d-b842-8879b84445b6"
-    })
-  };
+    // Configuration from your existing setup
+    private chatConfig = {
+        SdkAppId: 20026991,
+        AgentConfig: {
+            UserId: "robot_id",
+            UserSig: "", // Will be generated
+            TargetUserId: "12096",
+            WelcomeMessage: "Welcome to IELTS Speaking Test!",
+            InterruptMode: 0,
+            InterruptSpeechDuration: 1000
+        },
+        STTConfig: {
+            Language: "en",
+            VadSilenceTime: 1000,
+            CustomParam: JSON.stringify({
+                STTType: "deepgram",
+                Model: "nova-3",
+                ApiKey: "6f851cb6c7b34c0abeeaa42fe9dd651e48d3bceb"
+            })
+        },
+        LLMConfig: JSON.stringify({
+            LLMType: "dify",
+            APIUrl: "https://api.dify.ai/v1/chat-messages",
+            APIKey: "app-vmQTPOXtg1a7gIwOvZr1mt6D",
+            Timeout: 5,
+            User: "11775",
+            Inputs: {},
+            Model: null,
+            Streaming: true
+        }),
+        TTSConfig: JSON.stringify({
+            TTSType: "cartesia",
+            Model: "sonic-english",
+            APIKey: "sk_car_uUgWA7GoX1SQrwxntQ3zhB",
+            VoiceId: "e8e5fffb-252c-436d-b842-8879b84445b6"
+        })
+    };
 
-  private userInfo = {
-    sdkAppId: 20026991,
-    userSig: "", // Will be generated
-    robotSig: "", // Will be generated
-    userId: "12096",
-    robotId: "robot_id"
-  };
+    private userInfo = {
+        sdkAppId: 20026991,
+        userSig: "", // Will be generated
+        robotSig: "", // Will be generated
+        userId: "12096",
+        robotId: "robot_id"
+    };
 
-  static styles = css`
+    static styles = css`
     :host {
       display: block;
       width: 100%;
@@ -191,194 +191,194 @@ export class TencentAIConversation extends LitElement {
     }
   `;
 
-  async connectedCallback() {
-    super.connectedCallback();
-    await this.loadTRTCSDK();
-    await this.generateUserSigs();
-  }
-
-  private async loadTRTCSDK(): Promise<void> {
-    if ((window as any).TRTC) return;
-    
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load TRTC SDK'));
-      document.head.appendChild(script);
-    });
-  }
-
-  private async generateUserSigs() {
-    try {
-      // Generate user signature
-      const userSigResponse = await fetch('/api/trtc/usersig', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: this.userInfo.userId })
-      });
-      
-      if (!userSigResponse.ok) {
-        throw new Error('Failed to generate user signature');
-      }
-      
-      const userSigData = await userSigResponse.json();
-      this.userInfo.userSig = userSigData.userSig;
-
-      // Generate robot signature
-      const robotSigResponse = await fetch('/api/trtc/usersig', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: this.userInfo.robotId })
-      });
-      
-      if (!robotSigResponse.ok) {
-        throw new Error('Failed to generate robot signature');
-      }
-      
-      const robotSigData = await robotSigResponse.json();
-      this.userInfo.robotSig = robotSigData.userSig;
-      this.chatConfig.AgentConfig.UserSig = robotSigData.userSig;
-
-    } catch (error) {
-      console.error('Failed to generate user signatures:', error);
+    async connectedCallback() {
+        super.connectedCallback();
+        await this.loadTRTCSDK();
+        await this.generateUserSigs();
     }
-  }
 
-  private renderChatMessages() {
-    return this.messageList.map(message => html`
+    private async loadTRTCSDK(): Promise<void> {
+        if ((window as any).TRTC) return;
+
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js';
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error('Failed to load TRTC SDK'));
+            document.head.appendChild(script);
+        });
+    }
+
+    private async generateUserSigs() {
+        try {
+            // Generate user signature
+            const userSigResponse = await fetch('/api/trtc/usersig', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: this.userInfo.userId })
+            });
+
+            if (!userSigResponse.ok) {
+                throw new Error('Failed to generate user signature');
+            }
+
+            const userSigData = await userSigResponse.json();
+            this.userInfo.userSig = userSigData.userSig;
+
+            // Generate robot signature
+            const robotSigResponse = await fetch('/api/trtc/usersig', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: this.userInfo.robotId })
+            });
+
+            if (!robotSigResponse.ok) {
+                throw new Error('Failed to generate robot signature');
+            }
+
+            const robotSigData = await robotSigResponse.json();
+            this.userInfo.robotSig = robotSigData.userSig;
+            this.chatConfig.AgentConfig.UserSig = robotSigData.userSig;
+
+        } catch (error) {
+            console.error('Failed to generate user signatures:', error);
+        }
+    }
+
+    private renderChatMessages() {
+        return this.messageList.map(message => html`
       <div class="chat-item ${message.type}">
         <div class="chat-id">${message.sender}</div>
         <div class="chat-text">${message.content}</div>
       </div>
     `);
-  }
+    }
 
-  private async startConversation() {
-    if (this.isStarting || this.isConnected) return;
-    
-    this.isStarting = true;
-    
-    try {
-      // Initialize TRTC client
-      const TRTC = (window as any).TRTC;
-      this.trtcClient = TRTC.create();
-      
-      // Enter room
-      await this.trtcClient.enterRoom({
-        roomId: this.roomId,
-        scene: "rtc",
-        sdkAppId: this.userInfo.sdkAppId,
-        userId: this.userInfo.userId,
-        userSig: this.userInfo.userSig,
-      });
+    private async startConversation() {
+        if (this.isStarting || this.conversationActive) return;
 
-      // Listen for custom messages (AI responses)
-      this.trtcClient.on(TRTC.EVENT.CUSTOM_MESSAGE, (event: any) => {
+        this.isStarting = true;
+
         try {
-          const jsonData = new TextDecoder().decode(event.data);
-          const data = JSON.parse(jsonData);
-          
-          if (data.type === 10000) {
-            const sender = data.sender;
-            const text = data.payload.text;
-            const roundId = data.payload.roundid;
-            const isRobot = sender === 'robot_id';
-            const end = data.payload.end;
-            
-            // Find existing message or create new one
-            const existingIndex = this.messageList.findIndex(
-              item => item.id === roundId && item.sender === sender
-            );
-            
-            if (existingIndex >= 0) {
-              // Update existing message
-              this.messageList[existingIndex] = {
-                ...this.messageList[existingIndex],
-                content: text,
-                end
-              };
-            } else {
-              // Add new message
-              this.messageList = [
-                {
-                  id: roundId,
-                  content: text,
-                  sender,
-                  type: isRobot ? 'ai' : 'user',
-                  end
-                },
-                ...this.messageList
-              ];
+            // Initialize TRTC client
+            const TRTC = (window as any).TRTC;
+            this.trtcClient = TRTC.create();
+
+            // Enter room
+            await this.trtcClient.enterRoom({
+                roomId: this.roomId,
+                scene: "rtc",
+                sdkAppId: this.userInfo.sdkAppId,
+                userId: this.userInfo.userId,
+                userSig: this.userInfo.userSig,
+            });
+
+            // Listen for custom messages (AI responses)
+            this.trtcClient.on(TRTC.EVENT.CUSTOM_MESSAGE, (event: any) => {
+                try {
+                    const jsonData = new TextDecoder().decode(event.data);
+                    const data = JSON.parse(jsonData);
+
+                    if (data.type === 10000) {
+                        const sender = data.sender;
+                        const text = data.payload.text;
+                        const roundId = data.payload.roundid;
+                        const isRobot = sender === 'robot_id';
+                        const end = data.payload.end;
+
+                        // Find existing message or create new one
+                        const existingIndex = this.messageList.findIndex(
+                            item => item.id === roundId && item.sender === sender
+                        );
+
+                        if (existingIndex >= 0) {
+                            // Update existing message
+                            this.messageList[existingIndex] = {
+                                ...this.messageList[existingIndex],
+                                content: text,
+                                end
+                            };
+                        } else {
+                            // Add new message
+                            this.messageList = [
+                                {
+                                    id: roundId,
+                                    content: text,
+                                    sender,
+                                    type: isRobot ? 'ai' : 'user',
+                                    end
+                                },
+                                ...this.messageList
+                            ];
+                        }
+
+                        this.requestUpdate();
+                    }
+                } catch (error) {
+                    console.error('Error processing custom message:', error);
+                }
+            });
+
+            // Start local audio
+            await this.trtcClient.startLocalAudio();
+
+            // Start AI conversation
+            const conversationData = {
+                ...this.chatConfig,
+                RoomId: String(this.roomId)
+            };
+
+            const response = await fetch('/api/trtc/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(conversationData)
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to start AI conversation');
             }
-            
-            this.requestUpdate();
-          }
+
+            const result = await response.json();
+            this.taskId = result.TaskId;
+            this.conversationActive = true;
+
         } catch (error) {
-          console.error('Error processing custom message:', error);
+            console.error('Failed to start conversation:', error);
+            await this.stopConversation();
+        } finally {
+            this.isStarting = false;
         }
-      });
-
-      // Start local audio
-      await this.trtcClient.startLocalAudio();
-
-      // Start AI conversation
-      const conversationData = {
-        ...this.chatConfig,
-        RoomId: String(this.roomId)
-      };
-
-      const response = await fetch('/api/trtc/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(conversationData)
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to start AI conversation');
-      }
-
-      const result = await response.json();
-      this.taskId = result.TaskId;
-      this.isConnected = true;
-
-    } catch (error) {
-      console.error('Failed to start conversation:', error);
-      await this.stopConversation();
-    } finally {
-      this.isStarting = false;
     }
-  }
 
-  private async stopConversation() {
-    try {
-      // Stop AI conversation
-      if (this.taskId) {
-        await fetch('/api/trtc/stop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ TaskId: this.taskId })
-        });
-        this.taskId = null;
-      }
+    private async stopConversation() {
+        try {
+            // Stop AI conversation
+            if (this.taskId) {
+                await fetch('/api/trtc/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ TaskId: this.taskId })
+                });
+                this.taskId = null;
+            }
 
-      // Exit TRTC room
-      if (this.trtcClient) {
-        await this.trtcClient.exitRoom();
-        this.trtcClient.destroy();
-        this.trtcClient = null;
-      }
+            // Exit TRTC room
+            if (this.trtcClient) {
+                await this.trtcClient.exitRoom();
+                this.trtcClient.destroy();
+                this.trtcClient = null;
+            }
 
-    } catch (error) {
-      console.error('Error stopping conversation:', error);
-    } finally {
-      this.isConnected = false;
-      this.isStarting = false;
+        } catch (error) {
+            console.error('Error stopping conversation:', error);
+        } finally {
+            this.conversationActive = false;
+            this.isStarting = false;
+        }
     }
-  }
 
-  render() {
-    return html`
+    render() {
+        return html`
       <div class="container">
         <div class="room-info">Room ID: ${this.roomId}</div>
         
@@ -387,18 +387,18 @@ export class TencentAIConversation extends LitElement {
         </div>
 
         <div class="status">
-          ${this.isConnected 
-            ? 'Connected - AI conversation active' 
-            : this.isStarting 
-              ? 'Starting conversation...' 
-              : 'Ready to start conversation'
-          }
+          ${this.conversationActive
+                ? 'Connected - AI conversation active'
+                : this.isStarting
+                    ? 'Starting conversation...'
+                    : 'Ready to start conversation'
+            }
         </div>
 
         <div class="controls">
           <button 
             class="start-button" 
-            ?disabled=${this.isConnected || this.isStarting}
+            ?disabled=${this.conversationActive || this.isStarting}
             @click=${this.startConversation}
           >
             ${this.isStarting ? 'Starting...' : 'Start Conversation'}
@@ -406,7 +406,7 @@ export class TencentAIConversation extends LitElement {
           
           <button 
             class="end-button" 
-            ?disabled=${!this.isConnected}
+            ?disabled=${!this.conversationActive}
             @click=${this.stopConversation}
           >
             End Conversation
@@ -414,11 +414,11 @@ export class TencentAIConversation extends LitElement {
         </div>
       </div>
     `;
-  }
+    }
 }
 
 declare global {
-  interface HTMLElementTagNameMap {
-    'tencent-ai-conversation': TencentAIConversation;
-  }
+    interface HTMLElementTagNameMap {
+        'tencent-ai-conversation': TencentAIConversation;
+    }
 }
