@@ -96,17 +96,17 @@ export class GdmLiveAudio extends LitElement {
   session: any;
   liveLines: any;
   // WS pipeline state
-  private ws: WebSocket | null = null;
   private micProcessor: ScriptProcessorNode | null = null;
   private micSourceNode: MediaStreamAudioSourceNode | null = null;
-  private ttsChunks: Uint8Array[] = [];
-  private ttsPlaybackQueue: ArrayBuffer[] = [];
   private useBrowserTTS = true;
   // Piper download indicator
   @state() ttsDownloading = false;
   @state() ttsDownloadProgress = 0;
-  // Deepgram
-  private dg: WebSocket | null = null;
+  // Chunked STT
+  private recorder: MediaRecorder | null = null;
+  private chunkQueue: Blob[] = [];
+  private chunkSending = false;
+  private transcriptStartIdx = 0;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -1234,81 +1234,26 @@ export class GdmLiveAudio extends LitElement {
         if (p && p.total) this.ttsDownloadProgress = Math.min(100, Math.round((p.loaded / p.total) * 100));
       });
     } catch {} finally { this.ttsDownloading = false; }
-    // Start Deepgram Realtime
+    // Start mic capture + MediaRecorder and send chunks to /api/stt
     try {
-      const baseUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en-US&vad_turnoff=500';
-      let ws: WebSocket;
-      try {
-        const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
-        if (!tokenRes.ok) throw new Error(await tokenRes.text());
-        const { token } = await tokenRes.json();
-        ws = new WebSocket(baseUrl, ['token', token]);
-      } catch (tokenErr) {
-        const fallback = (process.env.DEEPGRAM_FRONTEND_TOKEN || '').trim();
-        if (!fallback) throw tokenErr;
-        // Fallback: use pre-scoped frontend token via access_token param
-        ws = new WebSocket(baseUrl + `&access_token=${encodeURIComponent(fallback)}`);
-      }
-      ws.binaryType = 'arraybuffer';
-      this.dg = ws as any;
-
-      ws.onopen = async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 }, video: false });
-        this.mediaStream = stream;
-        const src = this.inputAudioContext.createMediaStreamSource(stream);
-        this.micSourceNode = src as any;
-        const proc = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
-        this.micProcessor = proc as any;
-        proc.onaudioprocess = (e: any) => {
-          if (!this.dg || this.dg.readyState !== WebSocket.OPEN) return;
-          const chan = e.inputBuffer.getChannelData(0) as Float32Array;
-          const ab = this.floatTo16lePCM(chan);
-          this.dg.send(ab);
-        };
-        src.connect(proc);
-        proc.connect(this.inputNode);
-        this.isRecording = true;
-        this.updateStatus('Conversation started. Speak now.');
-        this.startTimer();
-        if (this.selectedPart === 'part1') {
-          try { await this.speakPart1(); } catch {}
-        } else if (this.selectedPart === 'part3') {
-          try { await this.speakPart3(); } catch {}
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 }, video: false });
+      this.mediaStream = stream;
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      this.recorder = mr;
+      this.transcriptStartIdx = this.currentTranscript.length;
+      mr.ondataavailable = (e: BlobEvent) => {
+        const b = e.data;
+        if (b && b.size > 0) {
+          this.chunkQueue.push(b);
+          this.pumpSttQueue();
         }
       };
-
-      ws.onmessage = async (ev: MessageEvent) => {
-        if (typeof (ev as any).data !== 'string') return;
-        const data = JSON.parse((ev as any).data);
-        const alts = data.channel?.alternatives || data.alternatives || [];
-        const alt = Array.isArray(alts) && alts[0] ? alts[0] : null;
-        const text = (alt?.transcript || alt?.punctuated?.transcript || '').trim();
-        const isFinal = !!(data.is_final || data.speech_final || data.type === 'FinalTranscript');
-        if (!text) return;
-        if (isFinal) {
-          this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
-          // Generate short examiner reply via /api/llm
-          try {
-            const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
-            const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` } ] }) });
-            if (r.ok) {
-              const { text: reply } = await r.json();
-              if (reply) {
-                this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
-                try { await speakWithPiper(reply, this.outputAudioContext, this.outputNode); } catch {}
-              }
-            }
-          } catch {}
-        }
-      };
-
-      ws.onclose = () => {
-        this.cleanupWs();
-      };
-      ws.onerror = (ev: any) => {
-        console.warn('Deepgram WS error', ev);
-        this.updateError('Deepgram connection error. Check DEEPGRAM env or network.');
-      };
+      mr.start(2000);
+      this.isRecording = true;
+      this.updateStatus('Conversation started. Speak now.');
+      this.startTimer();
+      if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
+      else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
     } catch (e) {
       console.error('Failed to start WS conversation', e);
       const hint = (e as any)?.message || String(e);
@@ -1317,13 +1262,11 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private cleanupWs() {
-    try { this.micProcessor && (this.micProcessor.disconnect() as any); } catch {}
-    try { this.micSourceNode && (this.micSourceNode.disconnect() as any); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch {}
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    this.recorder = null;
     this.micProcessor = null as any;
     this.micSourceNode = null as any;
-    try { this.dg?.close(); } catch {}
-    this.dg = null;
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Conversation stopped.');
@@ -1331,9 +1274,48 @@ export class GdmLiveAudio extends LitElement {
 
   private async stopWsConversation() {
     if (!this.isRecording) return;
-    try { this.dg?.send(JSON.stringify({ type: 'CloseStream' })); } catch {}
-    try { this.dg?.close(); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch {}
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    // Build a combined user text from this session
+    const userTexts = this.currentTranscript.slice(this.transcriptStartIdx).filter(e => e.speaker === 'user').map(e => e.text);
+    const combined = userTexts.join(' ').trim();
+    if (combined) {
+      try {
+        const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
+        const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${combined}` } ] }) });
+        if (r.ok) {
+          const { text: reply } = await r.json();
+          if (reply) {
+            this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
+            try { await speakWithPiper(reply, this.outputAudioContext, this.outputNode); } catch {}
+          }
+        }
+      } catch {}
+    }
     this.cleanupWs();
+  }
+
+  private async pumpSttQueue() {
+    if (this.chunkSending) return;
+    this.chunkSending = true;
+    try {
+      while (this.chunkQueue.length > 0) {
+        const blob = this.chunkQueue.shift()!;
+        try {
+          const buf = await blob.arrayBuffer();
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64: b64, contentType: blob.type || 'audio/webm' }) });
+          if (res.ok) {
+            const { text } = await res.json();
+            const t = (text || '').trim();
+            if (t) this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: t }];
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 20));
+      }
+    } finally {
+      this.chunkSending = false;
+    }
   }
 
   // Old STT proxy removed
