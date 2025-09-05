@@ -1349,7 +1349,13 @@ export class GdmLiveAudio extends LitElement {
         for (const c of candidates) {
           try { if ((window as any).MediaRecorder && (MediaRecorder as any).isTypeSupported?.(c)) { mimeType = c; break; } } catch {}
         }
-        const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        let rec: MediaRecorder;
+        try {
+          rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        } catch (e) {
+          this.updateError('MediaRecorder not supported in this browser. Try Chrome or set mic permissions.');
+          return;
+        }
         this.recorder = rec;
         // Connect mic stream to input visualizer
         try {
