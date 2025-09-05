@@ -96,7 +96,7 @@ export class GdmLiveAudio extends LitElement {
   private mediaRecorder: MediaRecorder | null = null;
   private startingRecording = false;
   session: any;
-  liveLines: any;
+  @state() liveLines: { id: string; text: string; role: 'user' | 'ai' }[] = [];
   // WS pipeline state
   private useBrowserTTS = true;
   // Piper download indicator
@@ -1338,8 +1338,24 @@ export class GdmLiveAudio extends LitElement {
         // 3) start microphone capture
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.mediaStream = stream;
-        const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        // Choose best supported mimeType for this browser
+        let mimeType: string | undefined;
+        const candidates = [
+          'audio/webm;codecs=opus',
+          'audio/ogg;codecs=opus',
+          'audio/webm',
+          'audio/ogg'
+        ];
+        for (const c of candidates) {
+          try { if ((window as any).MediaRecorder && (MediaRecorder as any).isTypeSupported?.(c)) { mimeType = c; break; } } catch {}
+        }
+        const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
         this.recorder = rec;
+        // Connect mic stream to input visualizer
+        try {
+          const micNode = this.inputAudioContext.createMediaStreamSource(stream);
+          micNode.connect(this.inputNode);
+        } catch {}
         rec.ondataavailable = async (e: BlobEvent) => {
           if (!e.data.size || this.dgConn?.getReadyState?.() !== 1) return;
           const buf = await e.data.arrayBuffer();
@@ -1363,6 +1379,7 @@ export class GdmLiveAudio extends LitElement {
         if (!text) return;
         if (msg.is_final) {
           this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
+          this.addLiveLine(text, 'user');
           try {
             const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
             const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` }] }) });
@@ -1370,6 +1387,7 @@ export class GdmLiveAudio extends LitElement {
               const { text: reply } = await r.json();
               if (reply) {
                 this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
+                this.addLiveLine(reply, 'ai');
                 try { await this.playWithPiperAndTrack(reply); } catch { }
               }
             }
@@ -1737,6 +1755,11 @@ export class GdmLiveAudio extends LitElement {
           
         </div>
       </div>
+      <!-- Global live overlay lines -->
+      <div id="live-overlay">
+        ${this.liveLines.map(l => html`<div class="live-line ${l.role}">${l.text}</div>`)}
+      </div>
+
       <div id="timer" ?hidden=${showOverlay}>
         ${this.isRecording || this.isPreparing
         ? this.isPreparing
