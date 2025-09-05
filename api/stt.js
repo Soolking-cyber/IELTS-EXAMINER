@@ -23,13 +23,13 @@ module.exports = async function handler(req, res) {
     if (urlInput) {
       ({ result, error } = await deepgram.listen.prerecorded.transcribeUrl(
         { url: urlInput },
-        { model: 'nova-3', smart_format: true, language: 'en-US' }
+        { model: 'nova-3', smart_format: true, language: 'en' }
       ));
     } else if (b64) {
       const buffer = Buffer.from(b64, 'base64');
       ({ result, error } = await deepgram.listen.prerecorded.transcribeFile(
         { buffer, mimetype: contentType },
-        { model: 'nova-3', smart_format: true, language: 'en-US' }
+        { model: 'nova-3', smart_format: true, language: 'en' }
       ));
     } else {
       return res.status(400).json({ error: 'Missing input', detail: 'Provide { url } or { base64, contentType }' });

@@ -1258,7 +1258,7 @@ export class GdmLiveAudio extends LitElement {
     } catch {} finally { this.ttsDownloading = false; }
     // Start Deepgram Realtime WS (stream PCM) to avoid REST codec issues
     try {
-      const baseUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en-US&vad_turnoff=500';
+      const baseUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en&vad_turnoff=1000';
       let ws: WebSocket;
       try {
         const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
