@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
         'process.env.STT_URL': JSON.stringify(env.STT_URL),
         'process.env.SITE_URL': JSON.stringify(env.SITE_URL),
         'process.env.WS_URL': JSON.stringify(env.WS_URL || env.WSS_URL || ''),
+        'process.env.DEEPGRAM_FRONTEND_TOKEN': JSON.stringify(env.DEEPGRAM_FRONTEND_TOKEN || ''),
         // Client URL settings only; do not expose secrets.
       },
       resolve: {

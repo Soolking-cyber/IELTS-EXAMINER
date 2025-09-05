@@ -1236,11 +1236,19 @@ export class GdmLiveAudio extends LitElement {
     } catch {} finally { this.ttsDownloading = false; }
     // Start Deepgram Realtime
     try {
-      const dgUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en-US&vad_turnoff=500';
-      const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
-      if (!tokenRes.ok) throw new Error(await tokenRes.text());
-      const { token } = await tokenRes.json();
-      const ws = new WebSocket(dgUrl, ['token', token]);
+      const baseUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en-US&vad_turnoff=500';
+      let ws: WebSocket;
+      try {
+        const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
+        if (!tokenRes.ok) throw new Error(await tokenRes.text());
+        const { token } = await tokenRes.json();
+        ws = new WebSocket(baseUrl, ['token', token]);
+      } catch (tokenErr) {
+        const fallback = (process.env.DEEPGRAM_FRONTEND_TOKEN || '').trim();
+        if (!fallback) throw tokenErr;
+        // Fallback: use pre-scoped frontend token via access_token param
+        ws = new WebSocket(baseUrl + `&access_token=${encodeURIComponent(fallback)}`);
+      }
       ws.binaryType = 'arraybuffer';
       this.dg = ws as any;
 
@@ -1297,12 +1305,14 @@ export class GdmLiveAudio extends LitElement {
       ws.onclose = () => {
         this.cleanupWs();
       };
-      ws.onerror = () => {
-        this.updateError('WS error');
+      ws.onerror = (ev: any) => {
+        console.warn('Deepgram WS error', ev);
+        this.updateError('Deepgram connection error. Check DEEPGRAM env or network.');
       };
     } catch (e) {
-      this.updateError('Failed to start WS conversation');
-      console.error(e);
+      console.error('Failed to start WS conversation', e);
+      const hint = (e as any)?.message || String(e);
+      this.updateError(`Failed to start WS conversation. ${hint}`);
     }
   }
 

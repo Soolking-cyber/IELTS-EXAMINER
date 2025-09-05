@@ -21,8 +21,9 @@ module.exports = async function handler(req, res) {
         comment: 'browser-realtime-temp',
         time_to_live_in_seconds: ttl,
         scopes: [
-          // Minimal scopes for realtime listen
+          // Scopes for realtime WS (read audio + transcripts)
           'listen:read',
+          'listen:write'
         ]
       })
     });
@@ -37,4 +38,3 @@ module.exports = async function handler(req, res) {
     res.status(500).json({ error: 'Deepgram token failure', detail: String(e && e.message || e) });
   }
 }
-
