@@ -1264,7 +1264,8 @@ export class GdmLiveAudio extends LitElement {
         const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
         if (!tokenRes.ok) throw new Error(await tokenRes.text());
         const { token } = await tokenRes.json();
-        ws = new WebSocket(baseUrl, ['token', token]);
+        // In browsers, auth via access_token query param is the supported path
+        ws = new WebSocket(baseUrl + `&access_token=${encodeURIComponent(token)}`);
       } catch (tokenErr) {
         const fallback = (process.env.DEEPGRAM_FRONTEND_TOKEN || '').trim();
         if (!fallback) throw tokenErr;
@@ -1319,8 +1320,14 @@ export class GdmLiveAudio extends LitElement {
         }
       };
 
-      ws.onclose = () => { this.cleanupWs(); };
-      ws.onerror = (e: any) => { console.warn('Deepgram WS error', e); this.updateError('Deepgram WS error'); };
+      ws.onclose = (e: any) => {
+        console.warn('Deepgram WS closed', e?.code, e?.reason);
+        this.cleanupWs();
+      };
+      ws.onerror = (e: any) => {
+        console.warn('Deepgram WS error', e);
+        this.updateError('Deepgram connection error. Check token and network.');
+      };
     } catch (e) {
       console.error('Failed to start WS conversation', e);
       const hint = (e as any)?.message || String(e);
