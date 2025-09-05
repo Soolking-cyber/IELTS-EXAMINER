@@ -1,4 +1,5 @@
 const fetch = global.fetch || require('node-fetch');
+const { createClient } = require('@deepgram/sdk');
 
 // Proxies audio to Deepgram REST transcription.
 // Accepts multipart/form-data with field 'audio' (Blob/File) or raw body.
@@ -12,42 +13,31 @@ module.exports = async function handler(req, res) {
     const apiKey = process.env.DEEPGRAM_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'Missing DEEPGRAM_API_KEY', hint: 'Set DEEPGRAM_API_KEY in your Vercel environment (Project Settings → Environment Variables) and redeploy.' });
 
-    // Extract raw audio bytes + content type
-    let contentType = req.headers['content-type'] || 'application/octet-stream';
-    let body;
-    if (contentType.startsWith('multipart/form-data')) {
-      // Vercel automatically parses body? In Node runtime, we need to rely on edge? For simplicity, accept raw chunks when client sends raw.
-      // To keep reliable, accept base64 in JSON too.
-      return res.status(400).json({ error: 'Use raw audio upload or JSON { base64, contentType }' });
-    } else if (contentType.startsWith('application/json')) {
-      const json = req.body || {};
-      const b64 = json.base64;
-      contentType = json.contentType || 'audio/webm';
-      if (!b64) return res.status(400).json({ error: 'Missing base64 audio' });
-      body = Buffer.from(b64, 'base64');
-    } else {
-      body = req;
-    }
+    const json = req.body || {};
+    const urlInput = json.url;
+    const b64 = json.base64;
+    const contentType = (json.contentType || '').split(';')[0] || 'audio/webm';
 
-    const url = 'https://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true';
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Token ${apiKey}`, 'Content-Type': contentType },
-      body
-    });
-    if (!r.ok) {
-      let payload = null;
-      let text = '';
-      try { payload = await r.json(); } catch { try { text = await r.text(); } catch {} }
-      return res.status(r.status).json({
-        error: 'Deepgram error',
-        status: r.status,
-        detail: payload || text || 'Unknown error',
-        hint: 'Verify DEEPGRAM_API_KEY is valid and belongs to the correct project. REST requires a standard API key (not a realtime-scoped token).'
-      });
+    const deepgram = createClient(apiKey);
+    let result, error;
+    if (urlInput) {
+      ({ result, error } = await deepgram.listen.prerecorded.transcribeUrl(
+        { url: urlInput },
+        { model: 'nova-3', smart_format: true, language: 'en-US' }
+      ));
+    } else if (b64) {
+      const buffer = Buffer.from(b64, 'base64');
+      ({ result, error } = await deepgram.listen.prerecorded.transcribeFile(
+        { buffer, mimetype: contentType },
+        { model: 'nova-3', smart_format: true, language: 'en-US' }
+      ));
+    } else {
+      return res.status(400).json({ error: 'Missing input', detail: 'Provide { url } or { base64, contentType }' });
     }
-    const dg = await r.json();
-    const text = dg?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+    if (error) {
+      return res.status(502).json({ error: 'Deepgram error', detail: error });
+    }
+    const text = result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
     res.status(200).json({ text });
   } catch (e) {
     res.status(500).json({ error: 'STT failure', detail: String(e && e.message || e) });
