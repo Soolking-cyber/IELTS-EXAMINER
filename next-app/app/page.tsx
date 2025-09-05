@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect } from 'react';
+import AuthBar from '@/components/AuthBar';
 import '@/components/gdm';
 
 export default function Page() {
@@ -8,8 +9,8 @@ export default function Page() {
   }, []);
   return (
     <main className="min-h-screen">
+      <AuthBar />
       <gdm-live-audio></gdm-live-audio>
     </main>
   );
 }
-
