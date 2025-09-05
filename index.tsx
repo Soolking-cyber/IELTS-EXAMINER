@@ -8,6 +8,7 @@
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
+import { createClient as createDeepgramClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import { preparePiper, isVoiceCached, clearVoiceCache, synthesizeToWavBlob } from './piperWeb';
 import './visual-3d';
 import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
@@ -107,7 +108,7 @@ export class GdmLiveAudio extends LitElement {
   private chunkQueue: Blob[] = [];
   private chunkSending = false;
   private transcriptStartIdx = 0;
-  private dg: WebSocket | null = null;
+  private dgConn: any = null;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -1323,55 +1324,51 @@ export class GdmLiveAudio extends LitElement {
         await preparePiper();
       }
     } catch {} finally { this.ttsDownloading = false; }
-    // Start Deepgram Realtime WS (stream PCM) to avoid REST codec issues
+    // Start Deepgram Live STT via SDK (WebSocket) with grant token
     try {
-      const baseUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en&vad_turnoff=1000';
-      let ws: WebSocket;
-      try {
-        const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
-        if (!tokenRes.ok) throw new Error(await tokenRes.text());
-        const { token } = await tokenRes.json();
-        // In browsers, auth via access_token query param is the supported path
-        ws = new WebSocket(baseUrl + `&access_token=${encodeURIComponent(token)}`);
-      } catch (tokenErr) {
-        const fallback = (process.env.DEEPGRAM_FRONTEND_TOKEN || '').trim();
-        if (!fallback) throw tokenErr;
-        ws = new WebSocket(baseUrl + `&access_token=${encodeURIComponent(fallback)}`);
-      }
-      ws.binaryType = 'arraybuffer';
-      this.dg = ws;
+      // 1) get short-lived access token via grant
+      const grant = await fetch('/api/deepgram/token');
+      if (!grant.ok) throw new Error(await grant.text());
+      const { access_token } = await grant.json();
+      const dg = createDeepgramClient({ accessToken: access_token });
+      // 2) connect to Live Transcription
+      const conn = dg.listen.live({
+        model: 'nova-3',
+        language: 'en',
+        smart_format: true,
+        punctuate: true,
+        interim_results: true,
+        vad_events: true,
+        endpointing: '1000',
+      });
+      this.dgConn = conn;
 
-      ws.onopen = async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 }, video: false });
+      conn.on(LiveTranscriptionEvents.Open, async () => {
+        // 3) start microphone capture
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.mediaStream = stream;
-        const src = this.inputAudioContext.createMediaStreamSource(stream);
-        this.micSourceNode = src as any;
-        const proc = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
-        this.micProcessor = proc as any;
-        proc.onaudioprocess = (e: any) => {
-          if (!this.dg || this.dg.readyState !== WebSocket.OPEN) return;
-          const chan = e.inputBuffer.getChannelData(0) as Float32Array;
-          const ab = this.floatTo16lePCM(chan);
-          this.dg.send(ab);
+        const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        this.recorder = rec;
+        rec.ondataavailable = async (e: BlobEvent) => {
+          if (!e.data.size || this.dgConn?.getReadyState?.() !== 1) return;
+          const buf = await e.data.arrayBuffer();
+          try { this.dgConn.send(buf); } catch {}
         };
-        src.connect(proc);
-        proc.connect(this.inputNode);
+        rec.start(250);
+        // UI state
         this.isRecording = true;
         this.updateStatus('Conversation started. Speak now.');
         this.startTimer();
         if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
         else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
-      };
+      });
 
-      ws.onmessage = async (ev: MessageEvent) => {
-        if (typeof (ev as any).data !== 'string') return;
-        const data = JSON.parse((ev as any).data);
-        const alts = data.channel?.alternatives || data.alternatives || [];
-        const alt = Array.isArray(alts) && alts[0] ? alts[0] : null;
-        const text = (alt?.transcript || alt?.punctuated?.transcript || '').trim();
-        const isFinal = !!(data.is_final || data.speech_final || data.type === 'FinalTranscript');
+      conn.on(LiveTranscriptionEvents.Transcript, async (msg: any) => {
+        const alt = msg?.channel?.alternatives?.[0];
+        if (!alt) return;
+        const text = (alt.transcript || '').trim();
         if (!text) return;
-        if (isFinal) {
+        if (msg.is_final) {
           this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
           try {
             const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
@@ -1385,18 +1382,15 @@ export class GdmLiveAudio extends LitElement {
             }
           } catch {}
         }
-      };
+      });
 
-      ws.onclose = (e: any) => {
-        console.warn('Deepgram WS closed', e?.code, e?.reason);
-        // Fallback to REST chunking if WS cannot establish
-        this.switchToRestStt();
-      };
-      ws.onerror = (e: any) => {
-        console.warn('Deepgram WS error', e);
-        this.updateError('Deepgram connection error. Falling back.');
-        this.switchToRestStt();
-      };
+      conn.on(LiveTranscriptionEvents.Error, (e: any) => {
+        console.warn('Deepgram Live error', e);
+        this.updateError('Deepgram Live error');
+      });
+      conn.on(LiveTranscriptionEvents.Close, () => {
+        try { this.recorder?.stop(); } catch {}
+      });
     } catch (e) {
       console.error('Failed to start WS conversation', e);
       const hint = (e as any)?.message || String(e);
@@ -1409,11 +1403,11 @@ export class GdmLiveAudio extends LitElement {
     // stop any ongoing TTS immediately
     this.cancelSpeaking();
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
-    try { this.dg && this.dg.close(); } catch {}
+    try { this.dgConn && this.dgConn.close && this.dgConn.close(); } catch {}
     this.recorder = null;
     this.micProcessor = null as any;
     this.micSourceNode = null as any;
-    this.dg = null;
+    this.dgConn = null;
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Conversation stopped.');
