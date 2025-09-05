@@ -19,10 +19,12 @@ module.exports = async function handler(req, res) {
     let json;
     try { json = JSON.parse(txt || '{}'); } catch { json = {}; }
     // Normalize to { access_token }
-    const access_token = json.access_token || json.token || '';
+    let access_token = json.access_token || json.token || '';
+    // Fallback: if grant fails or returns no token, use API key directly (requested behavior)
+    if (!access_token && !r.ok) access_token = key;
     const payload = access_token ? { access_token, expires_at: json.expires_at || null } : (json || {});
     res.setHeader('Content-Type', 'application/json');
-    return res.status(r.status).send(JSON.stringify(payload));
+    return res.status(access_token ? 200 : r.status).send(JSON.stringify(payload));
   } catch (e) {
     return res.status(500).json({ error: 'Grant failed', detail: String(e && e.message || e) });
   }
