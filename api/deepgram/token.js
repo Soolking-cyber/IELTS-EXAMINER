@@ -15,11 +15,15 @@ module.exports = async function handler(req, res) {
       method: 'POST',
       headers: { Authorization: `Token ${key}` },
     });
-    const bodyTxt = await r.text();
-    try { res.setHeader('Content-Type', 'application/json'); } catch {}
-    return res.status(r.status).send(bodyTxt || '{}');
+    const txt = await r.text();
+    let json;
+    try { json = JSON.parse(txt || '{}'); } catch { json = {}; }
+    // Normalize to { access_token }
+    const access_token = json.access_token || json.token || '';
+    const payload = access_token ? { access_token, expires_at: json.expires_at || null } : (json || {});
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(r.status).send(JSON.stringify(payload));
   } catch (e) {
     return res.status(500).json({ error: 'Grant failed', detail: String(e && e.message || e) });
   }
 }
-

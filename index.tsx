@@ -1266,49 +1266,7 @@ export class GdmLiveAudio extends LitElement {
     return buf;
   }
 
-  private pcmFloatBuffer: Float32Array[] = [];
-  private pcmSamplesTotal = 0;
-  private usingRestFallback = false;
-
-  private async sendWavChunkFromFloats(floats: Float32Array) {
-    const ab = this.floatTo16lePCM(floats);
-    const int16 = new Int16Array(ab);
-    const wavAb = this.encodeWavFromPCM16(int16, 16000);
-    const blob = new Blob([wavAb], { type: 'audio/wav' });
-    const b64 = await this.blobToBase64(blob);
-    const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64: b64, contentType: 'audio/wav' }) });
-    if (res.ok) {
-      const { text } = await res.json();
-      const t = (text || '').trim();
-      if (t) this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: t }];
-    }
-  }
-
-  private switchToRestStt() {
-    if (this.usingRestFallback) return;
-    this.usingRestFallback = true;
-    try {
-      if (this.micProcessor) {
-        this.pcmFloatBuffer = [];
-        this.pcmSamplesTotal = 0;
-        (this.micProcessor as any).onaudioprocess = (e: any) => {
-          const chunk = e.inputBuffer.getChannelData(0) as Float32Array;
-          this.pcmFloatBuffer.push(new Float32Array(chunk));
-          this.pcmSamplesTotal += chunk.length;
-          // every ~1 second at 16k
-          if (this.pcmSamplesTotal >= 16000) {
-            const merged = new Float32Array(this.pcmSamplesTotal);
-            let off = 0;
-            for (const c of this.pcmFloatBuffer) { merged.set(c, off); off += c.length; }
-            this.pcmFloatBuffer = [];
-            this.pcmSamplesTotal = 0;
-            this.sendWavChunkFromFloats(merged).catch(()=>{});
-          }
-        };
-        this.updateStatus('Realtime unavailable. Falling back to REST STT.');
-      }
-    } catch {}
-  }
+  // REST fallback removed per request; Live WS only
 
   private async startWsConversation() {
     if (this.isRecording || !this.selectedPart) return;
@@ -1330,6 +1288,7 @@ export class GdmLiveAudio extends LitElement {
       const grant = await fetch('/api/deepgram/token');
       if (!grant.ok) throw new Error(await grant.text());
       const { access_token } = await grant.json();
+      if (!access_token) throw new Error('No access token received from /api/deepgram/token');
       const dg = createDeepgramClient({ accessToken: access_token });
       // 2) connect to Live Transcription
       const conn = dg.listen.live({
