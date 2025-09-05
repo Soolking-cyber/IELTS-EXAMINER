@@ -1289,7 +1289,8 @@ export class GdmLiveAudio extends LitElement {
       if (!grant.ok) throw new Error(await grant.text());
       const { access_token } = await grant.json();
       if (!access_token) throw new Error('No access token received from /api/deepgram/token');
-      const dg = createDeepgramClient({ accessToken: access_token });
+      // Deepgram SDK expects an apiKey param; pass the grant token here (browser-safe)
+      const dg = createDeepgramClient({ apiKey: access_token });
       // 2) connect to Live Transcription
       const conn = dg.listen.live({
         model: 'nova-3',
@@ -1301,6 +1302,7 @@ export class GdmLiveAudio extends LitElement {
         endpointing: '1000',
       });
       this.dgConn = conn;
+      let keepAliveTimer: any = null;
 
       conn.on(LiveTranscriptionEvents.Open, async () => {
         // 3) start microphone capture
@@ -1314,6 +1316,8 @@ export class GdmLiveAudio extends LitElement {
           try { this.dgConn.send(buf); } catch {}
         };
         rec.start(250);
+        // Keep the socket warm during long pauses
+        try { keepAliveTimer = setInterval(() => { try { conn.keepAlive && conn.keepAlive(); } catch {} }, 5000); } catch {}
         // UI state
         this.isRecording = true;
         this.updateStatus('Conversation started. Speak now.');
@@ -1349,6 +1353,7 @@ export class GdmLiveAudio extends LitElement {
       });
       conn.on(LiveTranscriptionEvents.Close, () => {
         try { this.recorder?.stop(); } catch {}
+        if (keepAliveTimer) { try { clearInterval(keepAliveTimer); } catch {}; keepAliveTimer = null; }
       });
     } catch (e) {
       console.error('Failed to start WS conversation', e);
