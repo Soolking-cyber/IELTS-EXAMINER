@@ -109,6 +109,12 @@ export class GdmLiveAudio extends LitElement {
   private trtc: any = null;
   session: any;
   liveLines: any;
+  // WS pipeline state
+  private ws: WebSocket | null = null;
+  private micProcessor: ScriptProcessorNode | null = null;
+  private micSourceNode: MediaStreamAudioSourceNode | null = null;
+  private ttsChunks: Uint8Array[] = [];
+  private ttsPlaybackQueue: ArrayBuffer[] = [];
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -1550,6 +1556,111 @@ export class GdmLiveAudio extends LitElement {
 
 
 
+  private floatTo16lePCM(float32: Float32Array): ArrayBuffer {
+    const out = new ArrayBuffer(float32.length * 2);
+    const view = new DataView(out);
+    for (let i = 0; i < float32.length; i++) {
+      let s = Math.max(-1, Math.min(1, float32[i]));
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return out;
+  }
+
+  private async startWsConversation() {
+    if (this.isRecording || !this.selectedPart) return;
+    const url = (process.env.WS_URL || '').trim() || `ws://${location.hostname}:8787`;
+    try {
+      const ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      this.ws = ws;
+
+      ws.onopen = async () => {
+        ws.send(JSON.stringify({ type: 'start', session: { part: this.selectedPart } }));
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 }, video: false });
+        this.mediaStream = stream;
+        const src = this.inputAudioContext.createMediaStreamSource(stream);
+        this.micSourceNode = src as any;
+        const proc = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
+        this.micProcessor = proc as any;
+        proc.onaudioprocess = (e: any) => {
+          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+          const chan = e.inputBuffer.getChannelData(0) as Float32Array;
+          const ab = this.floatTo16lePCM(chan);
+          this.ws.send(ab);
+        };
+        src.connect(proc);
+        proc.connect(this.inputNode);
+        this.isRecording = true;
+        this.updateStatus('Conversation started. Speak now.');
+        this.startTimer();
+      };
+
+      ws.onmessage = async (ev: MessageEvent) => {
+        if (typeof (ev as any).data === 'string') {
+          const msg = JSON.parse((ev as any).data);
+          if (msg.type === 'stt') {
+            if (msg.final && msg.partial) {
+              this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.partial }];
+            }
+          } else if (msg.type === 'stt_final' && msg.text) {
+            this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.text }];
+          } else if (msg.type === 'llm' && msg.text) {
+            this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: msg.text }];
+          } else if (msg.type === 'tts_start') {
+            this.ttsChunks = [];
+          } else if (msg.type === 'tts_end') {
+            try {
+              const blob = new Blob(this.ttsChunks, { type: 'audio/wav' });
+              const arr = await blob.arrayBuffer();
+              const audio = await this.outputAudioContext.decodeAudioData(arr.slice(0));
+              const source = this.outputAudioContext.createBufferSource();
+              source.buffer = audio;
+              source.connect(this.outputNode);
+              source.start();
+            } catch (e) {
+              console.warn('TTS playback failed', e);
+            }
+          } else if (msg.type === 'error') {
+            console.warn('WS server error', msg);
+          }
+          return;
+        }
+        const data = (ev as any).data as Blob;
+        const chunk = new Uint8Array(await data.arrayBuffer());
+        this.ttsChunks.push(chunk);
+      };
+
+      ws.onclose = () => {
+        this.cleanupWs();
+      };
+      ws.onerror = () => {
+        this.updateError('WS error');
+      };
+    } catch (e) {
+      this.updateError('Failed to start WS conversation');
+      console.error(e);
+    }
+  }
+
+  private cleanupWs() {
+    try { this.micProcessor && (this.micProcessor.disconnect() as any); } catch {}
+    try { this.micSourceNode && (this.micSourceNode.disconnect() as any); } catch {}
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    this.micProcessor = null as any;
+    this.micSourceNode = null as any;
+    this.ws = null;
+    this.isRecording = false;
+    this.stopTimer();
+    this.updateStatus('Conversation stopped.');
+  }
+
+  private async stopWsConversation() {
+    if (!this.isRecording) return;
+    try { this.ws?.send(JSON.stringify({ type: 'stop' })); } catch {}
+    try { this.ws?.close(); } catch {}
+    this.cleanupWs();
+  }
+
   private async transcribeChunk(blob: Blob) {
     let base = '/api/stt';
     const direct = (process.env.STT_URL || '').trim();
@@ -1597,124 +1708,12 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private async startTencentConversation() {
-    if (this.isRecording || !this.selectedPart) return;
-    try {
-      const roomId = Number((this.trtcRoomId ?? (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : 10001)));
-      const userId = (this.trtcUserId || process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2, 8)}`);
-      const sigRes = await fetch('/api/trtc/usersig', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId })
-      });
-      if (!sigRes.ok) throw new Error(await sigRes.text());
-      const { sdkAppId, userSig } = await sigRes.json();
-      const TRTCsdk: any = await this.getTrtcSdk();
-      
-      // Check browser compatibility
-      if (!TRTCsdk) {
-        throw new Error('TRTC SDK failed to load');
-      }
-      
-      if (typeof TRTCsdk.isSupported === 'function' && !TRTCsdk.isSupported()) {
-        throw new Error('TRTC not supported in this browser. Please use Chrome, Firefox, or Safari.');
-      }
-      
-      if (!TRTCsdk.create) {
-        throw new Error('TRTC SDK loaded but create method not available');
-      }
-      const trtc = TRTCsdk.create();
-      // Handle kicks
-      trtc.on(TRTCsdk.EVENT.KICKED_OUT, (err: any) => {
-        console.error('Kicked from TRTC room', err);
-        this.stopTencentConversation();
-      });
-      // Handle remote audio available and ensure playback
-      trtc.on(TRTCsdk.EVENT.REMOTE_AUDIO_AVAILABLE, (event: any) => {
-        try {
-          console.log('TRTC remote audio available for', event.userId);
-          if (typeof trtc.startRemoteAudio === 'function') {
-            try { trtc.startRemoteAudio(event.userId); } catch {}
-          }
-          try { trtc.muteRemoteAudio(event.userId, false); } catch {}
-        } catch {}
-      });
-      // Handle remote user enter to proactively unmute
-      trtc.on(TRTCsdk.EVENT.REMOTE_USER_ENTER, (event: any) => {
-        try {
-          console.log('TRTC remote user enter', event.userId);
-          if (typeof trtc.startRemoteAudio === 'function') {
-            try { trtc.startRemoteAudio(event.userId); } catch {}
-          }
-          try { trtc.muteRemoteAudio(event.userId, false); } catch {}
-        } catch {}
-      });
-      // Ensure proper data types for TRTC
-      const enterRoomParams = {
-        sdkAppId: Number(sdkAppId),
-        userId: String(userId),
-        userSig: String(userSig),
-        roomId: Number(roomId)
-      };
-      
-      console.log('TRTC enterRoom params:', enterRoomParams);
-      await trtc.enterRoom(enterRoomParams);
-      // Resume audio contexts to satisfy autoplay policies
-      try { await this.outputAudioContext.resume(); } catch {}
-      try { await this.inputAudioContext.resume(); } catch {}
-      await trtc.startLocalAudio();
-      // Notify backend to start AI conversation with questions/cues
-      const startPayload: any = { RoomId: roomId, UserId: userId, AgentId: (this.trtcAgentId || process.env.TENCENT_AGENT_ID || undefined) };
-      if (this.selectedPart === 'part1') startPayload.Questions = this.part1Set || [];
-      if (this.selectedPart === 'part2') startPayload.CueCard = this.part2Topic || '';
-      if (this.selectedPart === 'part3') { startPayload.Part2Topic = this.part2Topic || ''; startPayload.Questions = this.part3Set || []; }
-      const startRes = await fetch('/api/trtc/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(startPayload) });
-      if (!startRes.ok) {
-        let errTxt = '';
-        try { errTxt = await startRes.text(); } catch {}
-        console.error('StartAIConversation failed', startRes.status, errTxt);
-        this.updateStatus('AI conversation start failed. Check cloud credentials/AgentId.');
-      } else {
-        try { console.log('StartAIConversation ok', await startRes.json()); } catch {}
-      }
-      (this as any).trtc = trtc;
-      // Start browser transcription so history works
-      this.startSpeechRecognition();
-      this.isRecording = true;
-      this.updateStatus('Conversation started with Tencent RTC AI.');
-      this.startTimer();
-    } catch (e) {
-      console.error('TRTC start error', e);
-      // No fallback: fail fast with clear guidance
-      if ((e as any)?.code === -100006) {
-        console.error('TRTC Error -100006: Check privilege failed');
-        this.updateStatus('TRTC auth failed (-100006). Open TRTC Health and whitelist this domain.');
-      } else if ((e as any)?.message?.includes('SDK')) {
-        this.updateStatus('TRTC SDK failed to load. Check network/CSP to web.sdk.qcloud.com');
-      } else {
-        this.updateStatus(`TRTC error: ${(e as any)?.message || (e as any)?.code || 'Unknown error'}`);
-      }
-      this.isRecording = false;
-      this.stopTimer();
-    }
+    // Refactor: use WS pipeline
+    await this.startWsConversation();
   }
 
   private async stopTencentConversation() {
-    if (!this.isRecording) return;
-    try {
-      const roomId = Number((this.trtcRoomId ?? (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : 10001)));
-      await fetch('/api/trtc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ RoomId: roomId }) });
-    } catch (e) { console.warn('TRTC stop error', e); }
-    try {
-      const trtc: any = (this as any).trtc;
-      if (trtc) {
-        try { await trtc.stopLocalAudio(); } catch {}
-        try { await trtc.exitRoom(); } catch {}
-        try { trtc.destroy(); } catch {}
-      }
-    } catch {}
-    (this as any).trtc = null;
-    this.stopSpeechRecognition();
-    this.isRecording = false;
-    this.stopTimer();
-    this.updateStatus('Conversation stopped.');
+    await this.stopWsConversation();
   }
 
   private async getAndSaveScore() {
