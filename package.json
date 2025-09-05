@@ -7,7 +7,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "local:vercel": "vercel dev --confirm",
-    "test:usersig": "node test-usersig.js"
+    "test:usersig": "node test-usersig.js",
+    "server": "npm run start --prefix server"
   },
   "dependencies": {
     "tencentcloud-sdk-nodejs-trtc": "^4.0.890",
