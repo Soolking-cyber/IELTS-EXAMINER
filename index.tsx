@@ -61,6 +61,7 @@ export class GdmLiveAudio extends LitElement {
   @state() selectedTest: TestRecord | null = null;
   @state() isScoring = false;
   @state() dgConnected = false;
+  @state() interimText = '';
   @state() isProfileVisible = false;
   @state() profileTab: 'profile' | 'history' = 'profile';
   @state() maskSensitive = true;
@@ -1383,7 +1384,14 @@ export class GdmLiveAudio extends LitElement {
         if (!alt) return;
         const text = (alt.transcript || '').trim();
         if (!text) return;
+        if (!msg.is_final) {
+          // Show interim text while speaking
+          this.interimText = text;
+          return;
+        }
         if (msg.is_final) {
+          // Clear interim on finalize
+          this.interimText = '';
           this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
           this.addLiveLine(text, 'user');
           try {
@@ -1404,11 +1412,13 @@ export class GdmLiveAudio extends LitElement {
       conn.on(LiveTranscriptionEvents.Error, (e: any) => {
         console.warn('Deepgram Live error', e);
         this.updateError('Deepgram Live error');
+        this.interimText = '';
       });
       conn.on(LiveTranscriptionEvents.Close, () => {
         this.dgConnected = false;
         try { this.recorder?.stop(); } catch { }
         if (keepAliveTimer) { try { clearInterval(keepAliveTimer); } catch { }; keepAliveTimer = null; }
+        this.interimText = '';
       });
     } catch (e) {
       console.error('Failed to start Live STT', e);
@@ -1426,6 +1436,7 @@ export class GdmLiveAudio extends LitElement {
     this.recorder = null;
     this.dgConn = null;
     this.dgConnected = false;
+    this.interimText = '';
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Live STT stopped.');
@@ -1763,6 +1774,7 @@ export class GdmLiveAudio extends LitElement {
       </div>
       <!-- Global live overlay lines -->
       <div id="live-overlay">
+        ${this.interimText ? html`<div class="live-line user">${this.interimText}</div>` : ''}
         ${this.liveLines.map(l => html`<div class="live-line ${l.role}">${l.text}</div>`)}
       </div>
 
