@@ -8,6 +8,7 @@
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
+import { ensurePiper, speakWithPiper } from './piperWeb';
 import './visual-3d';
 import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -100,6 +101,7 @@ export class GdmLiveAudio extends LitElement {
   private micSourceNode: MediaStreamAudioSourceNode | null = null;
   private ttsChunks: Uint8Array[] = [];
   private ttsPlaybackQueue: ArrayBuffer[] = [];
+  private useBrowserTTS = true;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -911,7 +913,7 @@ export class GdmLiveAudio extends LitElement {
     });
     for (const line of lines) {
       this.addExaminer(line);
-      try { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'say', text: line })); } catch {}
+      try { await speakWithPiper(line, this.outputAudioContext, this.outputNode); } catch {}
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -923,7 +925,7 @@ export class GdmLiveAudio extends LitElement {
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
     for (const line of lines) {
       this.addExaminer(line);
-      try { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'say', text: line })); } catch {}
+      try { await speakWithPiper(line, this.outputAudioContext, this.outputNode); } catch {}
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -1263,19 +1265,24 @@ export class GdmLiveAudio extends LitElement {
             this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.text }];
           } else if (msg.type === 'llm' && msg.text) {
             this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: msg.text }];
+            if (this.useBrowserTTS) {
+              try { await speakWithPiper(msg.text, this.outputAudioContext, this.outputNode); } catch (e) { console.warn('Piper web TTS failed', e); }
+            }
           } else if (msg.type === 'tts_start') {
-            this.ttsChunks = [];
+            if (!this.useBrowserTTS) this.ttsChunks = [];
           } else if (msg.type === 'tts_end') {
-            try {
-              const blob = new Blob(this.ttsChunks, { type: 'audio/wav' });
-              const arr = await blob.arrayBuffer();
-              const audio = await this.outputAudioContext.decodeAudioData(arr.slice(0));
-              const source = this.outputAudioContext.createBufferSource();
-              source.buffer = audio;
-              source.connect(this.outputNode);
-              source.start();
-            } catch (e) {
-              console.warn('TTS playback failed', e);
+            if (!this.useBrowserTTS) {
+              try {
+                const blob = new Blob(this.ttsChunks, { type: 'audio/wav' });
+                const arr = await blob.arrayBuffer();
+                const audio = await this.outputAudioContext.decodeAudioData(arr.slice(0));
+                const source = this.outputAudioContext.createBufferSource();
+                source.buffer = audio;
+                source.connect(this.outputNode);
+                source.start();
+              } catch (e) {
+                console.warn('TTS playback failed', e);
+              }
             }
           } else if (msg.type === 'error') {
             console.warn('WS server error', msg);
@@ -1283,8 +1290,10 @@ export class GdmLiveAudio extends LitElement {
           return;
         }
         const data = (ev as any).data as Blob;
-        const chunk = new Uint8Array(await data.arrayBuffer());
-        this.ttsChunks.push(chunk);
+        if (!this.useBrowserTTS) {
+          const chunk = new Uint8Array(await data.arrayBuffer());
+          this.ttsChunks.push(chunk);
+        }
       };
 
       ws.onclose = () => {

@@ -157,21 +157,9 @@ wss.on('connection', (ws) => {
           }
           if (finalText) sendJson({ type: 'stt_final', text: finalText });
 
-          // logic → TTS
+          // logic only; client handles TTS via browser Piper
           const reply = await ieltsLogic(part, finalText || '');
           sendJson({ type: 'llm', text: reply });
-          try {
-            const wav = await synthesizeWithPiper(reply);
-            // stream in chunks (~32KB)
-            sendJson({ type: 'tts_start', sampleRate: 22050 });
-            const CHUNK = 32 * 1024;
-            for (let i = 0; i < wav.length; i += CHUNK) {
-              ws.send(wav.subarray(i, Math.min(i + CHUNK, wav.length)));
-            }
-            sendJson({ type: 'tts_end' });
-          } catch (e) {
-            sendJson({ type: 'error', error: 'piper_failed', detail: e?.message || String(e) });
-          }
         }
         return;
       }
