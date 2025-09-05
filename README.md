@@ -20,6 +20,9 @@ Prerequisites: Node.js 18+ (or 20+), npm
    - `GEMINI_API_KEY=...`
    - `SUPABASE_URL=...`
    - `SUPABASE_ANON_KEY=...`
+   - Optional Deepgram (for Live STT):
+     - `DEEPGRAM_API_KEY=...` (server-side; used by `/api/deepgram/token`)
+     - Or for Vite-only local dev without serverless: `DEEPGRAM_FRONTEND_TOKEN=...` (temporary token or API key; do NOT commit)
 
 3) Supabase setup (one‑time)
    - Run your SQL files to create and populate:
@@ -30,8 +33,9 @@ Prerequisites: Node.js 18+ (or 20+), npm
    - Enable Google OAuth provider and add redirect: `http://localhost:5173`
 
 4) Run dev server
-   `npm run dev`
-   Open http://localhost:5173
+   - Best (enables `/api/*` routes locally): `npm run local:vercel` then open http://localhost:3000
+   - Vite-only: `npm run dev` then open http://localhost:5173
+     - If using Vite-only, set `DEEPGRAM_FRONTEND_TOKEN` in `.env.local` so the app can start Deepgram Live without the `/api/deepgram/token` grant.
 
 ## Deploy to Vercel
 
@@ -58,3 +62,4 @@ Vercel detects Vite automatically. This repo includes `vercel.json`:
 Notes
 - The app makes client‑side connections to Google Gemini for live audio and to Supabase for reads; ensure your RLS policies allow SELECT for `anon` or `authenticated` as intended.
 - Web Speech API (transcription) works best in Chrome and requires HTTPS (Vercel provides HTTPS by default).
+ - Deepgram Live STT requires either the grant API (`/api/deepgram/token` with `DEEPGRAM_API_KEY` set) or a `DEEPGRAM_FRONTEND_TOKEN` during local development.

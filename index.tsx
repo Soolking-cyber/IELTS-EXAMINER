@@ -1283,13 +1283,27 @@ export class GdmLiveAudio extends LitElement {
     } catch {} finally { this.ttsDownloading = false; }
     // Start Deepgram Live STT via SDK (WebSocket) with grant token
     try {
-      // 1) get short-lived access token via grant
-      const grant = await fetch('/api/deepgram/token');
-      if (!grant.ok) throw new Error(await grant.text());
-      const { access_token } = await grant.json();
-      if (!access_token) throw new Error('No access token received from /api/deepgram/token');
-      // Deepgram SDK expects an apiKey param; pass the grant token here (browser-safe)
-      const dg = createDeepgramClient({ apiKey: access_token });
+      // 1) get short-lived access token via grant (preferred in prod)
+      let accessToken: string | undefined;
+      try {
+        const grant = await fetch('/api/deepgram/token');
+        if (grant.ok) {
+          const json = await grant.json().catch(() => ({}));
+          accessToken = json?.access_token || json?.token || undefined;
+        }
+      } catch {}
+      // 1b) fallback for local Vite dev without serverless APIs
+      if (!accessToken) {
+        const fallback = (process as any)?.env?.DEEPGRAM_FRONTEND_TOKEN as string | undefined;
+        if (fallback && typeof fallback === 'string' && fallback.trim()) {
+          accessToken = fallback.trim();
+        }
+      }
+      if (!accessToken) {
+        throw new Error('Deepgram access token missing. Run with serverless APIs (vercel dev) or set DEEPGRAM_FRONTEND_TOKEN in .env.local');
+      }
+      // Deepgram SDK expects an apiKey param; pass the grant token or fallback key here
+      const dg = createDeepgramClient({ apiKey: accessToken });
       // 2) connect to Live Transcription
       const conn = dg.listen.live({
         model: 'nova-3',
@@ -1299,6 +1313,9 @@ export class GdmLiveAudio extends LitElement {
         interim_results: true,
         vad_events: true,
         endpointing: '1000',
+        // Important for browser MediaRecorder (WebM/Opus)
+        encoding: 'opus',
+        sample_rate: 48000,
       });
       this.dgConn = conn;
       let keepAliveTimer: any = null;
