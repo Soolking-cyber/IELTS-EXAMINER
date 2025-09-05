@@ -1242,6 +1242,73 @@ export class GdmLiveAudio extends LitElement {
     return out;
   }
 
+  private encodeWavFromPCM16(int16: Int16Array, sampleRate: number): ArrayBuffer {
+    const dataSize = int16.length * 2;
+    const buf = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buf);
+    const writeStr = (o: number, s: string) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); // PCM chunk size
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+    // write PCM data
+    new Uint8Array(int16.buffer).forEach((v, i) => view.setUint8(44 + i, v));
+    return buf;
+  }
+
+  private pcmFloatBuffer: Float32Array[] = [];
+  private pcmSamplesTotal = 0;
+  private usingRestFallback = false;
+
+  private async sendWavChunkFromFloats(floats: Float32Array) {
+    const ab = this.floatTo16lePCM(floats);
+    const int16 = new Int16Array(ab);
+    const wavAb = this.encodeWavFromPCM16(int16, 16000);
+    const blob = new Blob([wavAb], { type: 'audio/wav' });
+    const b64 = await this.blobToBase64(blob);
+    const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64: b64, contentType: 'audio/wav' }) });
+    if (res.ok) {
+      const { text } = await res.json();
+      const t = (text || '').trim();
+      if (t) this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: t }];
+    }
+  }
+
+  private switchToRestStt() {
+    if (this.usingRestFallback) return;
+    this.usingRestFallback = true;
+    try {
+      if (this.micProcessor) {
+        this.pcmFloatBuffer = [];
+        this.pcmSamplesTotal = 0;
+        (this.micProcessor as any).onaudioprocess = (e: any) => {
+          const chunk = e.inputBuffer.getChannelData(0) as Float32Array;
+          this.pcmFloatBuffer.push(new Float32Array(chunk));
+          this.pcmSamplesTotal += chunk.length;
+          // every ~1 second at 16k
+          if (this.pcmSamplesTotal >= 16000) {
+            const merged = new Float32Array(this.pcmSamplesTotal);
+            let off = 0;
+            for (const c of this.pcmFloatBuffer) { merged.set(c, off); off += c.length; }
+            this.pcmFloatBuffer = [];
+            this.pcmSamplesTotal = 0;
+            this.sendWavChunkFromFloats(merged).catch(()=>{});
+          }
+        };
+        this.updateStatus('Realtime unavailable. Falling back to REST STT.');
+      }
+    } catch {}
+  }
+
   private async startWsConversation() {
     if (this.isRecording || !this.selectedPart) return;
     // Prepare Piper (download voice with small progress UI)
@@ -1322,11 +1389,13 @@ export class GdmLiveAudio extends LitElement {
 
       ws.onclose = (e: any) => {
         console.warn('Deepgram WS closed', e?.code, e?.reason);
-        this.cleanupWs();
+        // Fallback to REST chunking if WS cannot establish
+        this.switchToRestStt();
       };
       ws.onerror = (e: any) => {
         console.warn('Deepgram WS error', e);
-        this.updateError('Deepgram connection error. Check token and network.');
+        this.updateError('Deepgram connection error. Falling back.');
+        this.switchToRestStt();
       };
     } catch (e) {
       console.error('Failed to start WS conversation', e);
