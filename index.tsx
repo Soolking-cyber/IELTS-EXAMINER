@@ -60,6 +60,7 @@ export class GdmLiveAudio extends LitElement {
   @state() isHistoryVisible = false;
   @state() selectedTest: TestRecord | null = null;
   @state() isScoring = false;
+  @state() dgConnected = false;
   @state() isProfileVisible = false;
   @state() profileTab: 'profile' | 'history' = 'profile';
   @state() maskSensitive = true;
@@ -97,8 +98,6 @@ export class GdmLiveAudio extends LitElement {
   session: any;
   liveLines: any;
   // WS pipeline state
-  private micProcessor: ScriptProcessorNode | null = null;
-  private micSourceNode: MediaStreamAudioSourceNode | null = null;
   private useBrowserTTS = true;
   // Piper download indicator
   @state() ttsDownloading = false;
@@ -119,7 +118,7 @@ export class GdmLiveAudio extends LitElement {
       document.head.appendChild(s);
     });
   }
-  // TRTC removed
+  
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
@@ -543,7 +542,7 @@ export class GdmLiveAudio extends LitElement {
       transform: translateY(-2px);
     }
 
-    /* Removed TRTC/Tencent health overlay styles */
+    
 
     /* History Panel Styles */
     #historyPanel {
@@ -782,7 +781,7 @@ export class GdmLiveAudio extends LitElement {
     super.connectedCallback();
     this.setupAuth();
     this.loadLocalHistory();
-    // TRTC removed
+    
   }
 
   private async setupAuth() {
@@ -820,9 +819,9 @@ export class GdmLiveAudio extends LitElement {
     await supabase.auth.signOut();
   }
 
-  // Tencent demo removed
+  
 
-  // TRTC health removed
+  
 
   // Guest mode removed
 
@@ -1067,7 +1066,7 @@ export class GdmLiveAudio extends LitElement {
       this.timer = duration;
       this.updateTimerDisplay();
       this.part2Topic = '';
-      await this.startTencentConversation();
+      await this.startLiveSession();
     } else if (part === 'part3') {
       await this.loadPart3Questions();
       const duration = this.partDurations[part];
@@ -1076,7 +1075,7 @@ export class GdmLiveAudio extends LitElement {
       if (!this.part2Topic) {
         // still allow Part 3 with generic questions
       }
-      await this.startTencentConversation();
+      await this.startLiveSession();
     } else {
       const duration = this.partDurations[part];
       this.timer = duration;
@@ -1176,7 +1175,7 @@ export class GdmLiveAudio extends LitElement {
       this.timer -= 1;
       this.updateTimerDisplay();
       if (this.timer <= 0) {
-        this.stopTencentConversation();
+        this.stopLiveSession();
       }
     }, 1000);
   }
@@ -1216,7 +1215,7 @@ export class GdmLiveAudio extends LitElement {
           this.timer = 120;
           this.updateTimerDisplay();
         }
-        this.startTencentConversation();
+        this.startLiveSession();
       }
     }, 1000);
   }
@@ -1229,7 +1228,7 @@ export class GdmLiveAudio extends LitElement {
     this.isPreparing = false;
   }
 
-  // Removed legacy MediaRecorder-based recording; using TRTC + browser transcription
+  
 
 
 
@@ -1268,7 +1267,7 @@ export class GdmLiveAudio extends LitElement {
 
   // REST fallback removed per request; Live WS only
 
-  private async startWsConversation() {
+  private async startLiveSession() {
     if (this.isRecording || !this.selectedPart) return;
     // Prepare Piper (download voice with small progress UI)
     try {
@@ -1305,6 +1304,7 @@ export class GdmLiveAudio extends LitElement {
       let keepAliveTimer: any = null;
 
       conn.on(LiveTranscriptionEvents.Open, async () => {
+        this.dgConnected = true;
         // 3) start microphone capture
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.mediaStream = stream;
@@ -1320,7 +1320,7 @@ export class GdmLiveAudio extends LitElement {
         try { keepAliveTimer = setInterval(() => { try { conn.keepAlive && conn.keepAlive(); } catch {} }, 5000); } catch {}
         // UI state
         this.isRecording = true;
-        this.updateStatus('Conversation started. Speak now.');
+        this.updateStatus('Live STT started. Speak now.');
         this.startTimer();
         if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
         else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
@@ -1352,13 +1352,14 @@ export class GdmLiveAudio extends LitElement {
         this.updateError('Deepgram Live error');
       });
       conn.on(LiveTranscriptionEvents.Close, () => {
+        this.dgConnected = false;
         try { this.recorder?.stop(); } catch {}
         if (keepAliveTimer) { try { clearInterval(keepAliveTimer); } catch {}; keepAliveTimer = null; }
       });
     } catch (e) {
-      console.error('Failed to start WS conversation', e);
+      console.error('Failed to start Live STT', e);
       const hint = (e as any)?.message || String(e);
-      this.updateError(`Failed to start WS conversation. ${hint}`);
+      this.updateError(`Failed to start Live STT. ${hint}`);
     }
   }
 
@@ -1369,15 +1370,14 @@ export class GdmLiveAudio extends LitElement {
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
     try { this.dgConn && this.dgConn.close && this.dgConn.close(); } catch {}
     this.recorder = null;
-    this.micProcessor = null as any;
-    this.micSourceNode = null as any;
     this.dgConn = null;
+    this.dgConnected = false;
     this.isRecording = false;
     this.stopTimer();
-    this.updateStatus('Conversation stopped.');
+    this.updateStatus('Live STT stopped.');
   }
 
-  private async stopWsConversation() {
+  private async stopLiveSession() {
     if (!this.isRecording) return;
     try { this.recorder && this.recorder.stop(); } catch {}
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
@@ -1446,20 +1446,13 @@ export class GdmLiveAudio extends LitElement {
   // Old STT proxy removed
   private toggleRecording() {
     if (this.isRecording) {
-      this.stopTencentConversation();
+      this.stopLiveSession();
     } else {
-      this.startTencentConversation();
+      this.startLiveSession();
     }
   }
 
-  private async startTencentConversation() {
-    // Refactor: use WS pipeline
-    await this.startWsConversation();
-  }
-
-  private async stopTencentConversation() {
-    await this.stopWsConversation();
-  }
+  // Removed Tencent wrapper methods
 
   private async getAndSaveScore() {
     if (this.currentTranscript.length === 0) return;
@@ -1508,8 +1501,8 @@ export class GdmLiveAudio extends LitElement {
 
   private reset() {
     if (this.isRecording) return;
-    // Stop any ongoing TRTC conversation and timers
-    try { this.stopTencentConversation(); } catch {}
+    // Stop any ongoing live session and timers
+    try { this.stopLiveSession(); } catch {}
     this.stopRecording();
     this.stopTimer();
     this.stopPreparationTimer();
@@ -1710,7 +1703,9 @@ export class GdmLiveAudio extends LitElement {
             </button>
             <div style="width: 56px; height: 56px;"></div>
           </div>
-          <div id="status">${this.error || this.status}</div>
+          <div id="status">${this.error || this.status}
+            ${this.isRecording ? html`<span style="margin-left:8px; padding:2px 6px; border-radius:999px; font-size:11px; ${this.dgConnected ? 'background:#0b3; color:#fff;' : 'background:#555; color:#fff;'}">Deepgram ${this.dgConnected ? 'Connected' : 'Connecting…'}</span>` : ''}
+          </div>
           
         </div>
       </div>
@@ -1783,7 +1778,7 @@ export class GdmLiveAudio extends LitElement {
     `;
   }
 
-  // TRTC config removed
+  
 
   
   private addLiveLine(text: string, role: 'user'|'ai') {
