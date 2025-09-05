@@ -8,6 +8,8 @@
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
+import { createClient as createDeepgramClient, LiveTranscriptionEvents } from '@deepgram/sdk';
+import { preparePiper, isVoiceCached, clearVoiceCache, synthesizeToWavBlob } from './piperWeb';
 import './visual-3d';
 import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -58,24 +60,11 @@ export class GdmLiveAudio extends LitElement {
   @state() isHistoryVisible = false;
   @state() selectedTest: TestRecord | null = null;
   @state() isScoring = false;
+  @state() dgConnected = false;
   @state() isProfileVisible = false;
   @state() profileTab: 'profile' | 'history' = 'profile';
-  @state() showTencentAIDemo = false;
-  // TRTC health overlay
-  @state() showTrtcHealth = false;
-  @state() trtcHealth: any = null;
-  @state() trtcHealthLoading = false;
   @state() maskSensitive = true;
-  // TRTC runtime configuration
-  @state() trtcRoomId: number | null = null;
-  @state() trtcUserId: string | null = null;
-  @state() trtcAgentId: string | null = null;
-  // Transcription indicator
-  @state() isTranscribing = false;
-  // Speech-to-text (browser)
-  private recognition: any = null;
-  private sttRestartOnEnd = false;
-  private lastSttRestartAt = 0;
+  // Browser SpeechRecognition removed
   // Supabase-driven question sets
   @state() part1Set: { topic: string; questions: string[] }[] = [];
   @state() part3Set: string[] = [];
@@ -106,15 +95,19 @@ export class GdmLiveAudio extends LitElement {
   private sourceNode: AudioBufferSourceNode;
   private mediaRecorder: MediaRecorder | null = null;
   private startingRecording = false;
-  private trtc: any = null;
   session: any;
   liveLines: any;
   // WS pipeline state
-  private ws: WebSocket | null = null;
-  private micProcessor: ScriptProcessorNode | null = null;
-  private micSourceNode: MediaStreamAudioSourceNode | null = null;
-  private ttsChunks: Uint8Array[] = [];
-  private ttsPlaybackQueue: ArrayBuffer[] = [];
+  private useBrowserTTS = true;
+  // Piper download indicator
+  @state() ttsDownloading = false;
+  @state() ttsDownloadProgress = 0;
+  // Chunked STT
+  private recorder: MediaRecorder | null = null;
+  private chunkQueue: Blob[] = [];
+  private chunkSending = false;
+  private transcriptStartIdx = 0;
+  private dgConn: any = null;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -125,23 +118,7 @@ export class GdmLiveAudio extends LitElement {
       document.head.appendChild(s);
     });
   }
-  private async getTrtcSdk(): Promise<any> {
-    if ((window as any).TRTC?.create) return (window as any).TRTC;
-    // Prefer local vendored SDK, then fallback to official CDN
-    const bust = `v=${Date.now()}`;
-    const localUrl = `/trtc.js?${bust}`;
-    const officialUrl = `https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js?${bust}`;
-    try {
-      await this.loadScript(localUrl);
-      if ((window as any).TRTC?.create) return (window as any).TRTC;
-      console.warn('Local TRTC not initialized after load; trying CDN');
-    } catch (e) {
-      console.warn('Failed to load local TRTC SDK:', e);
-    }
-    await this.loadScript(officialUrl);
-    if ((window as any).TRTC?.create) return (window as any).TRTC;
-    throw new Error('TRTC SDK failed to load from local or official source');
-  }
+  
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
@@ -565,63 +542,7 @@ export class GdmLiveAudio extends LitElement {
       transform: translateY(-2px);
     }
 
-    .health-link {
-      position: fixed;
-      bottom: 20px;
-      right: 180px;
-      background: #2c2c2e;
-      color: white;
-      padding: 12px 20px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 600;
-      z-index: 1000;
-      transition: all 0.2s ease;
-    }
-    .health-link:hover { background: #3a3a3c; transform: translateY(-2px); }
-
-    .footer-status { display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; color:#aaa; }
-    .status-pill { width:10px; height:10px; border-radius:50%; background:#666; display:inline-block; }
-    .status-pill.ok { background:#2ecc71; }
-    .status-pill.bad { background:#e74c3c; }
-    .status-pill.loading { background:#f1c40f; }
-
-    .tencent-demo-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.9);
-      z-index: 1000;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .demo-header {
-      background: #111;
-      padding: 16px 20px;
-      border-bottom: 1px solid #333;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .demo-header h2 {
-      margin: 0;
-      color: #fff;
-    }
-
-    .demo-close {
-      background: none;
-      border: none;
-      color: #fff;
-      font-size: 24px;
-      cursor: pointer;
-    }
-
-    .demo-content {
-      flex: 1;
-      overflow: hidden;
-    }
+    
 
     /* History Panel Styles */
     #historyPanel {
@@ -860,9 +781,7 @@ export class GdmLiveAudio extends LitElement {
     super.connectedCallback();
     this.setupAuth();
     this.loadLocalHistory();
-    this.loadTrtcConfig();
-    // Auto-check TRTC health on load (does not open overlay)
-    this.fetchTrtcHealth();
+    
   }
 
   private async setupAuth() {
@@ -900,140 +819,9 @@ export class GdmLiveAudio extends LitElement {
     await supabase.auth.signOut();
   }
 
-  private showTencentDemo() {
-    this.showTencentAIDemo = true;
-  }
+  
 
-  private closeTencentDemo() {
-    this.showTencentAIDemo = false;
-  }
-
-  private renderTencentDemo() {
-    if (!this.showTencentAIDemo) return '';
-    
-    const isCompatible = this.checkBrowserCompatibility();
-    
-    return html`
-      <div class="tencent-demo-overlay">
-        <div class="demo-header">
-          <h2>🤖 Tencent AI Conversation Demo</h2>
-          <button class="demo-close" @click=${this.closeTencentDemo}>×</button>
-        </div>
-        <div class="demo-content">
-          <div style="padding: 20px; text-align: center; color: #fff;">
-            <h3>Tencent AI Integration Status</h3>
-            
-            ${!isCompatible ? html`
-              <div style="background: #cc3300; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                <h4>⚠️ Browser Compatibility Issue</h4>
-                <p>TRTC requires a modern browser with WebRTC support.</p>
-                <p><strong>Recommended browsers:</strong> Chrome 56+, Firefox 44+, Safari 11+</p>
-                <p>The app will fallback to standard audio recording.</p>
-              </div>
-            ` : ''}
-            
-            <p>The Tencent AI conversation system has been integrated into your IELTS app.</p>
-            <p>Key features implemented:</p>
-            <ul style="text-align: left; max-width: 500px; margin: 20px auto;">
-              <li>${isCompatible ? '✅' : '⚠️'} TRTC SDK Integration</li>
-              <li>✅ UserSig Generation (Fixed)</li>
-              <li>${isCompatible ? '✅' : '⚠️'} Real-time Audio Communication</li>
-              <li>✅ AI Conversation API</li>
-              <li>✅ Speech-to-Text (Deepgram)</li>
-              <li>✅ Text-to-Speech (Cartesia)</li>
-              <li>✅ LLM Integration (Dify)</li>
-              <li>✅ Fallback Audio Recording</li>
-            </ul>
-            <p>The integration is now ready for testing within your IELTS speaking test parts.</p>
-            <button 
-              style="background: #0066cc; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; margin-top: 20px;"
-              @click=${this.closeTencentDemo}
-            >
-              Close Demo
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  // TRTC Health diagnostics
-  private async openTrtcHealth() {
-    this.showTrtcHealth = true;
-    await this.fetchTrtcHealth();
-  }
-  private closeTrtcHealth() { this.showTrtcHealth = false; }
-  private async fetchTrtcHealth() {
-    this.trtcHealthLoading = true;
-    try {
-      const res = await fetch('/api/trtc/health');
-      const json = await res.json();
-      this.trtcHealth = json;
-    } catch (e) {
-      this.trtcHealth = { ok: false, error: String(e) };
-    } finally {
-      this.trtcHealthLoading = false;
-      this.requestUpdate();
-    }
-  }
-  private renderTrtcHealth() {
-    if (!this.showTrtcHealth) return '';
-    const H = this.trtcHealth || {};
-    const ok = !!H.ok;
-    const maskify = (v: any) => {
-      const s = String(v ?? '');
-      if (!this.maskSensitive || !s) return s || '—';
-      const tail = s.slice(-3);
-      return `${'•'.repeat(Math.max(0, s.length - 3))}${tail}`;
-    };
-    return html`
-      <div class="tencent-demo-overlay">
-        <div class="demo-header">
-          <h2>TRTC Health</h2>
-          <button class="demo-close" @click=${this.closeTrtcHealth}>×</button>
-        </div>
-        <div class="demo-content">
-          <div style="padding: 20px; color: #fff; max-width: 800px; margin: 0 auto;">
-            ${this.trtcHealthLoading ? html`<p>Checking TRTC configuration…</p>` : html`
-              <p>Status: <strong style="color:${ok ? '#7CFC00' : '#ff6666'};">${ok ? 'OK' : 'Issue detected'}</strong></p>
-              <label style="display:inline-flex; align-items:center; gap:8px; margin:8px 0 12px 0; font-size:13px;">
-                <input type="checkbox" .checked=${this.maskSensitive} @change=${(e: any) => { this.maskSensitive = !!e.target.checked; }} />
-                Mask sensitive values
-              </label>
-              <div style="display:grid; grid-template-columns: 260px 1fr; gap:8px; align-items:center;">
-                <div>SDK App ID</div><div>${maskify(H.env?.sdkAppId)}</div>
-                <div>Has SDK Secret Key</div><div>${H.env?.hasSdkSecretKey ? 'Yes' : 'No'}</div>
-                <div>Cloud API Ready</div><div>${H.checks?.cloudApiReady ? 'Yes' : 'No (skipped)'}</div>
-                <div>UserSig OK</div><div>${H.checks?.userSigOk ? 'Yes' : 'No'}</div>
-                <div>UserSig Length</div><div>${H.checks?.userSigLength ?? 0}</div>
-                <div>Region</div><div>${maskify(H.env?.region)}</div>
-              </div>
-              ${Array.isArray(H.messages) && H.messages.length ? html`
-                <div style="margin-top:16px; background:#1a1a1a; padding:12px; border-radius:8px;">
-                  <strong>Messages</strong>
-                  <ul>
-                    ${H.messages.map((m:any) => html`<li>${m}</li>`)}
-                  </ul>
-                </div>
-              ` : ''}
-            `}
-            <div style="margin-top:20px; display:flex; gap:10px;">
-              <button class="demo-link" style="position:static; background:#0066cc;" @click=${() => this.fetchTrtcHealth()}>Recheck</button>
-              <button class="demo-link" style="position:static; background:#333;" @click=${this.closeTrtcHealth}>Close</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  private checkBrowserCompatibility(): boolean {
-    // Check for WebRTC support
-    const hasWebRTC = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-    const hasRTCPeerConnection = !!(window.RTCPeerConnection || (window as any).webkitRTCPeerConnection);
-    
-    return hasWebRTC && hasRTCPeerConnection;
-  }
+  
 
   // Guest mode removed
 
@@ -1119,6 +907,22 @@ export class GdmLiveAudio extends LitElement {
     this.nextStartTime = 0;
   }
 
+  private async playWithPiperAndTrack(text: string) {
+    if (!text || !text.trim()) return;
+    try { await this.outputAudioContext.resume(); } catch {}
+    const wav = await synthesizeToWavBlob(text);
+    const arr = await wav.arrayBuffer();
+    const buffer = await this.outputAudioContext.decodeAudioData(arr.slice(0));
+    const source = this.outputAudioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.outputNode);
+    this.sources.add(source);
+    source.start();
+    await new Promise<void>((resolve) => { source.onended = () => resolve(); });
+    try { source.disconnect(); } catch {}
+    this.sources.delete(source);
+  }
+
   private async speakPart1() {
     if (!this.part1Set || this.part1Set.length === 0) return;
     const lines: string[] = [];
@@ -1129,7 +933,11 @@ export class GdmLiveAudio extends LitElement {
         lines.push(`Question ${qi + 1}: ${q}`);
       });
     });
-    await this.speakLinesWithTTS(lines);
+    for (const line of lines) {
+      this.addExaminer(line);
+      try { await this.playWithPiperAndTrack(line); } catch {}
+      await new Promise(r => setTimeout(r, 50));
+    }
   }
 
   private async speakPart3() {
@@ -1137,86 +945,14 @@ export class GdmLiveAudio extends LitElement {
     const lines: string[] = [];
     lines.push("Now Part 3. Let's discuss some broader questions.");
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
-    await this.speakLinesWithTTS(lines);
-  }
-
-  private async speakLinesWithGemini(lines: string[]) {
-    await this.ensureSession();
-    if (!this.session) return;
-    this.speaking = true;
-    this.speakCancel = false;
     for (const line of lines) {
-      if (this.speakCancel) break;
       this.addExaminer(line);
-      const before = this.audioEvents;
-      // Send text message to Gemini Live session
-      try {
-        await this.session.send({ text: line });
-      } catch (e) {
-        console.error('Failed to send message to Gemini:', e);
-      }
-      // Wait until we receive at least one audio chunk or a short timeout
-      const start = performance.now();
-      while (this.audioEvents === before && performance.now() - start < 2000) {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      if (this.speakCancel) break;
-      // Small gap before next line to avoid overlap
-      await new Promise((r) => setTimeout(r, 150));
+      try { await this.playWithPiperAndTrack(line); } catch {}
+      await new Promise(r => setTimeout(r, 50));
     }
-    this.speaking = false;
   }
 
-  private async speakLinesWithTTS(lines: string[]) {
-    this.speaking = true;
-    this.speakCancel = false;
-    for (const line of lines) {
-      if (this.speakCancel) break;
-      this.addExaminer(line);
-      try {
-        const res = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: line }),
-        });
-        if (!res.ok) {
-          try { console.warn('TTS error', res.status, await res.text()); } catch {}
-          await this.speakLinesWithGemini([line]);
-          continue;
-        }
-        const data = await res.json();
-        const b64 = data.audio || data.wav || data.data;
-        const mime = data.mimeType || data.mimetype || 'audio/wav';
-        if (!b64) {
-          await this.speakLinesWithGemini([line]);
-          continue;
-        }
-        await this.playTtsBase64(b64, mime);
-      } catch (e) {
-        console.warn('TTS fetch failed', e);
-        await this.speakLinesWithGemini([line]);
-      }
-      if (this.speakCancel) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    this.speaking = false;
-  }
-
-  private async playTtsBase64(b64: string, mime: string) {
-    const src = `data:${mime};base64,${b64}`;
-    const audio = new Audio();
-    audio.src = src;
-    audio.crossOrigin = 'anonymous';
-    try { await this.outputAudioContext.resume(); } catch {}
-    const source = this.outputAudioContext.createMediaElementSource(audio);
-    source.connect(this.outputNode);
-    await new Promise<void>((resolve) => {
-      const onEnd = () => { audio.removeEventListener('ended', onEnd); resolve(); };
-      audio.addEventListener('ended', onEnd);
-      audio.play().catch(() => resolve());
-    });
-    try { source.disconnect(); } catch {}
-  }
+  // Old TTS/LLM methods removed (Gemini/TTS endpoints)
 
   private updateStatus(msg: string) {
     this.error = '';
@@ -1316,67 +1052,7 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  // --- Browser Speech-to-Text ---
-  private startSpeechRecognition() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn('SpeechRecognition API not available');
-      return;
-    }
-    if (!this.recognition) {
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true;
-      this.recognition.lang = 'en-US';
-      this.recognition.onstart = () => {
-        this.isTranscribing = true;
-      };
-      this.recognition.onresult = (event: any) => {
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i];
-          const text = res[0]?.transcript?.trim();
-          if (!text) continue;
-          if (res.isFinal) {
-            this.currentTranscript = [
-              ...this.currentTranscript,
-              { speaker: 'user', text },
-            ];
-          }
-        }
-      };
-      this.recognition.onerror = (e: any) => {
-        const err = e?.error || e;
-        const transient = err === 'no-speech' || err === 'network' || err === 'aborted';
-        if (!transient) {
-          console.warn('STT error', err);
-        }
-        // Throttle restarts to avoid loops
-        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-        if (this.isRecording && transient && now - this.lastSttRestartAt > 1000) {
-          this.lastSttRestartAt = now;
-          try { this.recognition.stop(); } catch {}
-          setTimeout(() => {
-            if (this.isRecording) {
-              try { this.recognition.start(); } catch {}
-            }
-          }, 300);
-        }
-      };
-      this.recognition.onend = () => {
-        if (this.isRecording) {
-          try { this.recognition.start(); } catch {}
-          this.isTranscribing = true;
-        } else {
-          this.isTranscribing = false;
-        }
-      };
-    }
-    try { this.recognition.start(); } catch {}
-  }
-
-  private stopSpeechRecognition() {
-    try { this.recognition && this.recognition.stop(); } catch {}
-  }
+  // Browser SpeechRecognition removed; WS Vosk handles STT
 
   private async selectPart(part: 'part1' | 'part2' | 'part3') {
     if (this.isRecording || this.isPreparing) return;
@@ -1390,7 +1066,7 @@ export class GdmLiveAudio extends LitElement {
       this.timer = duration;
       this.updateTimerDisplay();
       this.part2Topic = '';
-      await this.startTencentConversation();
+      await this.startLiveSession();
     } else if (part === 'part3') {
       await this.loadPart3Questions();
       const duration = this.partDurations[part];
@@ -1399,7 +1075,7 @@ export class GdmLiveAudio extends LitElement {
       if (!this.part2Topic) {
         // still allow Part 3 with generic questions
       }
-      await this.startTencentConversation();
+      await this.startLiveSession();
     } else {
       const duration = this.partDurations[part];
       this.timer = duration;
@@ -1499,7 +1175,7 @@ export class GdmLiveAudio extends LitElement {
       this.timer -= 1;
       this.updateTimerDisplay();
       if (this.timer <= 0) {
-        this.stopTencentConversation();
+        this.stopLiveSession();
       }
     }, 1000);
   }
@@ -1539,7 +1215,7 @@ export class GdmLiveAudio extends LitElement {
           this.timer = 120;
           this.updateTimerDisplay();
         }
-        this.startTencentConversation();
+        this.startLiveSession();
       }
     }, 1000);
   }
@@ -1552,7 +1228,7 @@ export class GdmLiveAudio extends LitElement {
     this.isPreparing = false;
   }
 
-  // Removed legacy MediaRecorder-based recording; using TRTC + browser transcription
+  
 
 
 
@@ -1566,155 +1242,217 @@ export class GdmLiveAudio extends LitElement {
     return out;
   }
 
-  private async startWsConversation() {
+  private encodeWavFromPCM16(int16: Int16Array, sampleRate: number): ArrayBuffer {
+    const dataSize = int16.length * 2;
+    const buf = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buf);
+    const writeStr = (o: number, s: string) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); // PCM chunk size
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+    // write PCM data
+    new Uint8Array(int16.buffer).forEach((v, i) => view.setUint8(44 + i, v));
+    return buf;
+  }
+
+  // REST fallback removed per request; Live WS only
+
+  private async startLiveSession() {
     if (this.isRecording || !this.selectedPart) return;
-    const url = (process.env.WS_URL || '').trim() || `ws://${location.hostname}:8787`;
+    // Prepare Piper (download voice with small progress UI)
     try {
-      const ws = new WebSocket(url);
-      ws.binaryType = 'arraybuffer';
-      this.ws = ws;
+      const cached = await isVoiceCached();
+      if (!cached) {
+        this.ttsDownloading = true; this.ttsDownloadProgress = 0;
+        await preparePiper((p: any) => {
+          if (p && p.total) this.ttsDownloadProgress = Math.min(100, Math.round((p.loaded / p.total) * 100));
+        });
+      } else {
+        await preparePiper();
+      }
+    } catch {} finally { this.ttsDownloading = false; }
+    // Start Deepgram Live STT via SDK (WebSocket) with grant token
+    try {
+      // 1) get short-lived access token via grant
+      const grant = await fetch('/api/deepgram/token');
+      if (!grant.ok) throw new Error(await grant.text());
+      const { access_token } = await grant.json();
+      if (!access_token) throw new Error('No access token received from /api/deepgram/token');
+      // Deepgram SDK expects an apiKey param; pass the grant token here (browser-safe)
+      const dg = createDeepgramClient({ apiKey: access_token });
+      // 2) connect to Live Transcription
+      const conn = dg.listen.live({
+        model: 'nova-3',
+        language: 'en',
+        smart_format: true,
+        punctuate: true,
+        interim_results: true,
+        vad_events: true,
+        endpointing: '1000',
+      });
+      this.dgConn = conn;
+      let keepAliveTimer: any = null;
 
-      ws.onopen = async () => {
-        ws.send(JSON.stringify({ type: 'start', session: { part: this.selectedPart } }));
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 }, video: false });
+      conn.on(LiveTranscriptionEvents.Open, async () => {
+        this.dgConnected = true;
+        // 3) start microphone capture
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.mediaStream = stream;
-        const src = this.inputAudioContext.createMediaStreamSource(stream);
-        this.micSourceNode = src as any;
-        const proc = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
-        this.micProcessor = proc as any;
-        proc.onaudioprocess = (e: any) => {
-          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-          const chan = e.inputBuffer.getChannelData(0) as Float32Array;
-          const ab = this.floatTo16lePCM(chan);
-          this.ws.send(ab);
+        const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        this.recorder = rec;
+        rec.ondataavailable = async (e: BlobEvent) => {
+          if (!e.data.size || this.dgConn?.getReadyState?.() !== 1) return;
+          const buf = await e.data.arrayBuffer();
+          try { this.dgConn.send(buf); } catch {}
         };
-        src.connect(proc);
-        proc.connect(this.inputNode);
+        rec.start(250);
+        // Keep the socket warm during long pauses
+        try { keepAliveTimer = setInterval(() => { try { conn.keepAlive && conn.keepAlive(); } catch {} }, 5000); } catch {}
+        // UI state
         this.isRecording = true;
-        this.updateStatus('Conversation started. Speak now.');
+        this.updateStatus('Live STT started. Speak now.');
         this.startTimer();
-      };
+        if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
+        else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
+      });
 
-      ws.onmessage = async (ev: MessageEvent) => {
-        if (typeof (ev as any).data === 'string') {
-          const msg = JSON.parse((ev as any).data);
-          if (msg.type === 'stt') {
-            if (msg.final && msg.partial) {
-              this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.partial }];
+      conn.on(LiveTranscriptionEvents.Transcript, async (msg: any) => {
+        const alt = msg?.channel?.alternatives?.[0];
+        if (!alt) return;
+        const text = (alt.transcript || '').trim();
+        if (!text) return;
+        if (msg.is_final) {
+          this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
+          try {
+            const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
+            const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` } ] }) });
+            if (r.ok) {
+              const { text: reply } = await r.json();
+              if (reply) {
+                this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
+                try { await this.playWithPiperAndTrack(reply); } catch {}
+              }
             }
-          } else if (msg.type === 'stt_final' && msg.text) {
-            this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.text }];
-          } else if (msg.type === 'llm' && msg.text) {
-            this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: msg.text }];
-          } else if (msg.type === 'tts_start') {
-            this.ttsChunks = [];
-          } else if (msg.type === 'tts_end') {
-            try {
-              const blob = new Blob(this.ttsChunks, { type: 'audio/wav' });
-              const arr = await blob.arrayBuffer();
-              const audio = await this.outputAudioContext.decodeAudioData(arr.slice(0));
-              const source = this.outputAudioContext.createBufferSource();
-              source.buffer = audio;
-              source.connect(this.outputNode);
-              source.start();
-            } catch (e) {
-              console.warn('TTS playback failed', e);
-            }
-          } else if (msg.type === 'error') {
-            console.warn('WS server error', msg);
-          }
-          return;
+          } catch {}
         }
-        const data = (ev as any).data as Blob;
-        const chunk = new Uint8Array(await data.arrayBuffer());
-        this.ttsChunks.push(chunk);
-      };
+      });
 
-      ws.onclose = () => {
-        this.cleanupWs();
-      };
-      ws.onerror = () => {
-        this.updateError('WS error');
-      };
+      conn.on(LiveTranscriptionEvents.Error, (e: any) => {
+        console.warn('Deepgram Live error', e);
+        this.updateError('Deepgram Live error');
+      });
+      conn.on(LiveTranscriptionEvents.Close, () => {
+        this.dgConnected = false;
+        try { this.recorder?.stop(); } catch {}
+        if (keepAliveTimer) { try { clearInterval(keepAliveTimer); } catch {}; keepAliveTimer = null; }
+      });
     } catch (e) {
-      this.updateError('Failed to start WS conversation');
-      console.error(e);
+      console.error('Failed to start Live STT', e);
+      const hint = (e as any)?.message || String(e);
+      this.updateError(`Failed to start Live STT. ${hint}`);
     }
   }
 
   private cleanupWs() {
-    try { this.micProcessor && (this.micProcessor.disconnect() as any); } catch {}
-    try { this.micSourceNode && (this.micSourceNode.disconnect() as any); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch {}
+    // stop any ongoing TTS immediately
+    this.cancelSpeaking();
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
-    this.micProcessor = null as any;
-    this.micSourceNode = null as any;
-    this.ws = null;
+    try { this.dgConn && this.dgConn.close && this.dgConn.close(); } catch {}
+    this.recorder = null;
+    this.dgConn = null;
+    this.dgConnected = false;
     this.isRecording = false;
     this.stopTimer();
-    this.updateStatus('Conversation stopped.');
+    this.updateStatus('Live STT stopped.');
   }
 
-  private async stopWsConversation() {
+  private async stopLiveSession() {
     if (!this.isRecording) return;
-    try { this.ws?.send(JSON.stringify({ type: 'stop' })); } catch {}
-    try { this.ws?.close(); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch {}
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    // Build a combined user text from this session
+    const userTexts = this.currentTranscript.slice(this.transcriptStartIdx).filter(e => e.speaker === 'user').map(e => e.text);
+    const combined = userTexts.join(' ').trim();
+    if (combined) {
+      try {
+        const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
+        const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${combined}` } ] }) });
+        if (r.ok) {
+          const { text: reply } = await r.json();
+          if (reply) {
+            this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
+            try { await this.playWithPiperAndTrack(reply); } catch {}
+          }
+        }
+      } catch {}
+    }
     this.cleanupWs();
   }
 
-  private async transcribeChunk(blob: Blob) {
-    let base = '/api/stt';
-    const direct = (process.env.STT_URL || '').trim();
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname;
-      const isVercel = /vercel\.app$/i.test(host);
-      if (!isVercel && direct) base = direct.replace(/\/$/, '') + '/stt';
-    } else if (direct) {
-      base = direct.replace(/\/$/, '') + '/stt';
-    }
+  private async pumpSttQueue() {
+    if (this.chunkSending) return;
+    this.chunkSending = true;
     try {
-      const fd = new FormData();
-      const file = new File([blob], 'chunk.webm', { type: blob.type || 'audio/webm' });
-      fd.append('audio', file);
-      const qs = new URLSearchParams({ language: 'en' }).toString();
-      const res = await fetch(`${base}?${qs}`, {
-        method: 'POST',
-        body: fd,
-      });
-      if (!res.ok) {
+      while (this.chunkQueue.length > 0) {
+        const blob = this.chunkQueue.shift()!;
         try {
-          const errTxt = await res.text();
-          console.warn('STT proxy error', res.status, errTxt);
+          const b64 = await this.blobToBase64(blob);
+          const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64: b64, contentType: (blob.type || 'audio/webm;codecs=opus') }) });
+          if (res.ok) {
+            const { text } = await res.json();
+            const t = (text || '').trim();
+            if (t) this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: t }];
+          } else {
+            try {
+              const err = await res.json();
+              console.warn('STT error', err);
+              this.updateError(err?.detail?.error || err?.error || `STT ${res.status}`);
+            } catch {}
+          }
         } catch {}
-        return;
+        await new Promise(r => setTimeout(r, 20));
       }
-      const json = await res.json();
-      const text = (json && json.text || '').trim();
-      if (text) {
-        this.currentTranscript = [
-          ...this.currentTranscript,
-          { speaker: 'user', text },
-        ];
-      }
-    } catch (_) {
-      // ignore network errors
+    } finally {
+      this.chunkSending = false;
     }
   }
+
+  private blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('read-failed'));
+      fr.onload = () => {
+        try {
+          const s = String(fr.result || '');
+          const idx = s.indexOf(',');
+          resolve(idx >= 0 ? s.slice(idx + 1) : s);
+        } catch (e) { reject(e as any); }
+      };
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  // Old STT proxy removed
   private toggleRecording() {
     if (this.isRecording) {
-      this.stopTencentConversation();
+      this.stopLiveSession();
     } else {
-      this.startTencentConversation();
+      this.startLiveSession();
     }
   }
 
-  private async startTencentConversation() {
-    // Refactor: use WS pipeline
-    await this.startWsConversation();
-  }
-
-  private async stopTencentConversation() {
-    await this.stopWsConversation();
-  }
+  // Removed Tencent wrapper methods
 
   private async getAndSaveScore() {
     if (this.currentTranscript.length === 0) return;
@@ -1763,8 +1501,8 @@ export class GdmLiveAudio extends LitElement {
 
   private reset() {
     if (this.isRecording) return;
-    // Stop any ongoing TRTC conversation and timers
-    try { this.stopTencentConversation(); } catch {}
+    // Stop any ongoing live session and timers
+    try { this.stopLiveSession(); } catch {}
     this.stopRecording();
     this.stopTimer();
     this.stopPreparationTimer();
@@ -1786,7 +1524,9 @@ export class GdmLiveAudio extends LitElement {
     this.updateStatus('Session cleared.');
   }
   stopRecording() {
-    throw new Error('Method not implemented.');
+    try { this.recorder && this.recorder.stop(); } catch {}
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    this.recorder = null;
   }
 
   private renderHistoryList() {
@@ -1965,12 +1705,10 @@ export class GdmLiveAudio extends LitElement {
             </button>
             <div style="width: 56px; height: 56px;"></div>
           </div>
-          <div id="status">${this.error || this.status}</div>
-          <div class="footer-status" title="TRTC health">
-            <span class="status-pill ${this.trtcHealthLoading ? 'loading' : (this.trtcHealth ? (this.trtcHealth.ok ? 'ok' : 'bad') : 'loading')}"></span>
-            <span>TRTC</span>
+          <div id="status">${this.error || this.status}
+            ${this.isRecording ? html`<span style="margin-left:8px; padding:2px 6px; border-radius:999px; font-size:11px; ${this.dgConnected ? 'background:#0b3; color:#fff;' : 'background:#555; color:#fff;'}">Deepgram ${this.dgConnected ? 'Connected' : 'Connecting…'}</span>` : ''}
           </div>
-          ${this.isRecording ? html`<div style="color:#7ad7ff; font-size:12px;">${this.isTranscribing ? 'Transcribing…' : ''}</div>` : ''}
+          
         </div>
       </div>
       <div id="timer" ?hidden=${showOverlay}>
@@ -1996,6 +1734,7 @@ export class GdmLiveAudio extends LitElement {
       <gdm-live-audio-visuals-3d
         .inputNode=${this.inputNode}
         .outputNode=${this.outputNode}></gdm-live-audio-visuals-3d>
+      ${this.ttsDownloading ? html`<div style="position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#111; border:1px solid #333; color:#fff; padding:8px 12px; border-radius:8px; font-size:12px; z-index: 20;">Downloading voice… ${this.ttsDownloadProgress}%</div>` : ''}
     `;
   }
 
@@ -2026,30 +1765,22 @@ export class GdmLiveAudio extends LitElement {
       <div>
         <h3 style="margin:8px 0 4px;">${name}</h3>
         <div style="color:#aaa; font-size:14px; margin-bottom:10px;">Signed in with Google</div>
-        <!-- TRTC settings auto-assigned; no manual input required. -->
+        
         <h4 style="margin:12px 0 6px;">Previous Scores</h4>
         ${scores.length === 0
           ? html`<div style="color:#aaa;">No tests yet.</div>`
           : html`<ul style="margin:0; padding-left:18px;">${scores.map((s) => html`<li>${s}</li>`)}</ul>`}
+
+        <div style="margin-top:16px;">
+          <h4 style="margin:12px 0 6px;">Voice Cache</h4>
+          <div style="color:#aaa; font-size:13px; margin-bottom:8px;">Downloaded Piper voice is kept for faster playback. Clear to force re-download.</div>
+          <button class="logout-btn" @click=${async () => { try { await clearVoiceCache(); this.updateStatus('Cleared downloaded voice. It will re-download on next use.'); } catch {} }}>Clear Downloaded Voice</button>
+        </div>
       </div>
     `;
   }
 
-  private loadTrtcConfig() {
-    try {
-      const raw = localStorage.getItem('trtc_config');
-      if (raw) {
-        const obj = JSON.parse(raw);
-        this.trtcRoomId = typeof obj.roomId === 'number' ? obj.roomId : (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : null);
-        this.trtcUserId = obj.userId || process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2,8)}`;
-        this.trtcAgentId = obj.agentId || process.env.TENCENT_AGENT_ID || "robot_id";
-      } else {
-        this.trtcRoomId = process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : (Math.floor(Math.random()*90000)+10000);
-        this.trtcUserId = process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2,8)}`;
-        this.trtcAgentId = process.env.TENCENT_AGENT_ID || "robot_id";
-      }
-    } catch {}
-  }
+  
 
   
   private addLiveLine(text: string, role: 'user'|'ai') {
@@ -2131,10 +1862,6 @@ export class GdmLiveAudio extends LitElement {
     // Otherwise show the main app.
     return html`
       ${this.renderApp()}
-      <button class="health-link" @click=${this.openTrtcHealth}>
-        🛠 TRTC Health
-      </button>
-      ${this.renderTrtcHealth()}
     `;
   }
 }

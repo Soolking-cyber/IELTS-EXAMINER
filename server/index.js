@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { WebSocketServer } from 'ws';
+import http from 'http';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -89,8 +90,22 @@ function pcm16leToFloat32(int16) {
   return out;
 }
 
-const wss = new WebSocketServer({ port: PORT });
-console.log(`[server] WS listening on ws://localhost:${PORT}`);
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+    res.end(JSON.stringify({ ok: true, vosk: !!voskAvailable, llm: !!openai }));
+  } else if (req.url === '/version') {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ielts-audio-server 0.1.0');
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+const wss = new WebSocketServer({ server });
+server.listen(PORT, () => {
+  console.log(`[server] WS listening on ws://0.0.0.0:${PORT}`);
+});
 
 wss.on('connection', (ws) => {
   console.log('[server] client connected');
@@ -117,6 +132,19 @@ wss.on('connection', (ws) => {
             recognizer = null;
           }
           sendJson({ type: 'ready', asr: !!recognizer, tts: true, llm: !!openai });
+        } else if (msg.type === 'say' && typeof msg.text === 'string' && msg.text.trim()) {
+          // One-off TTS for client prompts
+          try {
+            const wav = await synthesizeWithPiper(String(msg.text));
+            sendJson({ type: 'tts_start', sampleRate: 22050 });
+            const CHUNK = 32 * 1024;
+            for (let i = 0; i < wav.length; i += CHUNK) {
+              ws.send(wav.subarray(i, Math.min(i + CHUNK, wav.length)));
+            }
+            sendJson({ type: 'tts_end' });
+          } catch (e) {
+            sendJson({ type: 'error', error: 'piper_failed', detail: e?.message || String(e) });
+          }
         } else if (msg.type === 'stop') {
           // finalize ASR
           let finalText = lastFinalText;
@@ -129,21 +157,9 @@ wss.on('connection', (ws) => {
           }
           if (finalText) sendJson({ type: 'stt_final', text: finalText });
 
-          // logic → TTS
+          // logic only; client handles TTS via browser Piper
           const reply = await ieltsLogic(part, finalText || '');
           sendJson({ type: 'llm', text: reply });
-          try {
-            const wav = await synthesizeWithPiper(reply);
-            // stream in chunks (~32KB)
-            sendJson({ type: 'tts_start', sampleRate: 22050 });
-            const CHUNK = 32 * 1024;
-            for (let i = 0; i < wav.length; i += CHUNK) {
-              ws.send(wav.subarray(i, Math.min(i + CHUNK, wav.length)));
-            }
-            sendJson({ type: 'tts_end' });
-          } catch (e) {
-            sendJson({ type: 'error', error: 'piper_failed', detail: e?.message || String(e) });
-          }
         }
         return;
       }
@@ -178,4 +194,3 @@ wss.on('connection', (ws) => {
     try { recognizer?.free?.(); } catch {}
   });
 });
-
