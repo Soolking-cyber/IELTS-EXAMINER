@@ -534,63 +534,7 @@ export class GdmLiveAudio extends LitElement {
       transform: translateY(-2px);
     }
 
-    .health-link {
-      position: fixed;
-      bottom: 20px;
-      right: 180px;
-      background: #2c2c2e;
-      color: white;
-      padding: 12px 20px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 600;
-      z-index: 1000;
-      transition: all 0.2s ease;
-    }
-    .health-link:hover { background: #3a3a3c; transform: translateY(-2px); }
-
-    .footer-status { display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; color:#aaa; }
-    .status-pill { width:10px; height:10px; border-radius:50%; background:#666; display:inline-block; }
-    .status-pill.ok { background:#2ecc71; }
-    .status-pill.bad { background:#e74c3c; }
-    .status-pill.loading { background:#f1c40f; }
-
-    .tencent-demo-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.9);
-      z-index: 1000;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .demo-header {
-      background: #111;
-      padding: 16px 20px;
-      border-bottom: 1px solid #333;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .demo-header h2 {
-      margin: 0;
-      color: #fff;
-    }
-
-    .demo-close {
-      background: none;
-      border: none;
-      color: #fff;
-      font-size: 24px;
-      cursor: pointer;
-    }
-
-    .demo-content {
-      flex: 1;
-      overflow: hidden;
-    }
+    /* Removed TRTC/Tencent health overlay styles */
 
     /* History Panel Styles */
     #historyPanel {
@@ -965,7 +909,11 @@ export class GdmLiveAudio extends LitElement {
         lines.push(`Question ${qi + 1}: ${q}`);
       });
     });
-    lines.forEach(line => this.addExaminer(line));
+    for (const line of lines) {
+      this.addExaminer(line);
+      try { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'say', text: line })); } catch {}
+      await new Promise(r => setTimeout(r, 50));
+    }
   }
 
   private async speakPart3() {
@@ -973,7 +921,11 @@ export class GdmLiveAudio extends LitElement {
     const lines: string[] = [];
     lines.push("Now Part 3. Let's discuss some broader questions.");
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
-    lines.forEach(line => this.addExaminer(line));
+    for (const line of lines) {
+      this.addExaminer(line);
+      try { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'say', text: line })); } catch {}
+      await new Promise(r => setTimeout(r, 50));
+    }
   }
 
   // Old TTS/LLM methods removed (Gemini/TTS endpoints)
@@ -1293,6 +1245,11 @@ export class GdmLiveAudio extends LitElement {
         this.isRecording = true;
         this.updateStatus('Conversation started. Speak now.');
         this.startTimer();
+        if (this.selectedPart === 'part1') {
+          try { await this.speakPart1(); } catch {}
+        } else if (this.selectedPart === 'part3') {
+          try { await this.speakPart3(); } catch {}
+        }
       };
 
       ws.onmessage = async (ev: MessageEvent) => {
@@ -1685,7 +1642,7 @@ export class GdmLiveAudio extends LitElement {
       <div>
         <h3 style="margin:8px 0 4px;">${name}</h3>
         <div style="color:#aaa; font-size:14px; margin-bottom:10px;">Signed in with Google</div>
-        <!-- TRTC settings auto-assigned; no manual input required. -->
+        
         <h4 style="margin:12px 0 6px;">Previous Scores</h4>
         ${scores.length === 0
           ? html`<div style="color:#aaa;">No tests yet.</div>`

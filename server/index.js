@@ -117,6 +117,19 @@ wss.on('connection', (ws) => {
             recognizer = null;
           }
           sendJson({ type: 'ready', asr: !!recognizer, tts: true, llm: !!openai });
+        } else if (msg.type === 'say' && typeof msg.text === 'string' && msg.text.trim()) {
+          // One-off TTS for client prompts
+          try {
+            const wav = await synthesizeWithPiper(String(msg.text));
+            sendJson({ type: 'tts_start', sampleRate: 22050 });
+            const CHUNK = 32 * 1024;
+            for (let i = 0; i < wav.length; i += CHUNK) {
+              ws.send(wav.subarray(i, Math.min(i + CHUNK, wav.length)));
+            }
+            sendJson({ type: 'tts_end' });
+          } catch (e) {
+            sendJson({ type: 'error', error: 'piper_failed', detail: e?.message || String(e) });
+          }
         } else if (msg.type === 'stop') {
           // finalize ASR
           let finalText = lastFinalText;
@@ -178,4 +191,3 @@ wss.on('connection', (ws) => {
     try { recognizer?.free?.(); } catch {}
   });
 });
-
