@@ -102,6 +102,11 @@ export class GdmLiveAudio extends LitElement {
   private ttsChunks: Uint8Array[] = [];
   private ttsPlaybackQueue: ArrayBuffer[] = [];
   private useBrowserTTS = true;
+  // Piper download indicator
+  @state() ttsDownloading = false;
+  @state() ttsDownloadProgress = 0;
+  // Deepgram
+  private dg: WebSocket | null = null;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -1222,14 +1227,24 @@ export class GdmLiveAudio extends LitElement {
 
   private async startWsConversation() {
     if (this.isRecording || !this.selectedPart) return;
-    const url = (process.env.WS_URL || '').trim() || `ws://${location.hostname}:8787`;
+    // Prepare Piper (download voice with small progress UI)
     try {
-      const ws = new WebSocket(url);
+      this.ttsDownloading = true; this.ttsDownloadProgress = 0;
+      await ensurePiper((p: any) => {
+        if (p && p.total) this.ttsDownloadProgress = Math.min(100, Math.round((p.loaded / p.total) * 100));
+      });
+    } catch {} finally { this.ttsDownloading = false; }
+    // Start Deepgram Realtime
+    try {
+      const dgUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en-US&vad_turnoff=500';
+      const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
+      if (!tokenRes.ok) throw new Error(await tokenRes.text());
+      const { token } = await tokenRes.json();
+      const ws = new WebSocket(dgUrl, ['token', token]);
       ws.binaryType = 'arraybuffer';
-      this.ws = ws;
+      this.dg = ws as any;
 
       ws.onopen = async () => {
-        ws.send(JSON.stringify({ type: 'start', session: { part: this.selectedPart } }));
         const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 }, video: false });
         this.mediaStream = stream;
         const src = this.inputAudioContext.createMediaStreamSource(stream);
@@ -1237,10 +1252,10 @@ export class GdmLiveAudio extends LitElement {
         const proc = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
         this.micProcessor = proc as any;
         proc.onaudioprocess = (e: any) => {
-          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+          if (!this.dg || this.dg.readyState !== WebSocket.OPEN) return;
           const chan = e.inputBuffer.getChannelData(0) as Float32Array;
           const ab = this.floatTo16lePCM(chan);
-          this.ws.send(ab);
+          this.dg.send(ab);
         };
         src.connect(proc);
         proc.connect(this.inputNode);
@@ -1255,44 +1270,27 @@ export class GdmLiveAudio extends LitElement {
       };
 
       ws.onmessage = async (ev: MessageEvent) => {
-        if (typeof (ev as any).data === 'string') {
-          const msg = JSON.parse((ev as any).data);
-          if (msg.type === 'stt') {
-            if (msg.final && msg.partial) {
-              this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.partial }];
-            }
-          } else if (msg.type === 'stt_final' && msg.text) {
-            this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: msg.text }];
-          } else if (msg.type === 'llm' && msg.text) {
-            this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: msg.text }];
-            if (this.useBrowserTTS) {
-              try { await speakWithPiper(msg.text, this.outputAudioContext, this.outputNode); } catch (e) { console.warn('Piper web TTS failed', e); }
-            }
-          } else if (msg.type === 'tts_start') {
-            if (!this.useBrowserTTS) this.ttsChunks = [];
-          } else if (msg.type === 'tts_end') {
-            if (!this.useBrowserTTS) {
-              try {
-                const blob = new Blob(this.ttsChunks, { type: 'audio/wav' });
-                const arr = await blob.arrayBuffer();
-                const audio = await this.outputAudioContext.decodeAudioData(arr.slice(0));
-                const source = this.outputAudioContext.createBufferSource();
-                source.buffer = audio;
-                source.connect(this.outputNode);
-                source.start();
-              } catch (e) {
-                console.warn('TTS playback failed', e);
+        if (typeof (ev as any).data !== 'string') return;
+        const data = JSON.parse((ev as any).data);
+        const alts = data.channel?.alternatives || data.alternatives || [];
+        const alt = Array.isArray(alts) && alts[0] ? alts[0] : null;
+        const text = (alt?.transcript || alt?.punctuated?.transcript || '').trim();
+        const isFinal = !!(data.is_final || data.speech_final || data.type === 'FinalTranscript');
+        if (!text) return;
+        if (isFinal) {
+          this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
+          // Generate short examiner reply via /api/llm
+          try {
+            const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
+            const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` } ] }) });
+            if (r.ok) {
+              const { text: reply } = await r.json();
+              if (reply) {
+                this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
+                try { await speakWithPiper(reply, this.outputAudioContext, this.outputNode); } catch {}
               }
             }
-          } else if (msg.type === 'error') {
-            console.warn('WS server error', msg);
-          }
-          return;
-        }
-        const data = (ev as any).data as Blob;
-        if (!this.useBrowserTTS) {
-          const chunk = new Uint8Array(await data.arrayBuffer());
-          this.ttsChunks.push(chunk);
+          } catch {}
         }
       };
 
@@ -1314,7 +1312,8 @@ export class GdmLiveAudio extends LitElement {
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
     this.micProcessor = null as any;
     this.micSourceNode = null as any;
-    this.ws = null;
+    try { this.dg?.close(); } catch {}
+    this.dg = null;
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Conversation stopped.');
@@ -1322,8 +1321,8 @@ export class GdmLiveAudio extends LitElement {
 
   private async stopWsConversation() {
     if (!this.isRecording) return;
-    try { this.ws?.send(JSON.stringify({ type: 'stop' })); } catch {}
-    try { this.ws?.close(); } catch {}
+    try { this.dg?.send(JSON.stringify({ type: 'CloseStream' })); } catch {}
+    try { this.dg?.close(); } catch {}
     this.cleanupWs();
   }
 
@@ -1621,6 +1620,7 @@ export class GdmLiveAudio extends LitElement {
       <gdm-live-audio-visuals-3d
         .inputNode=${this.inputNode}
         .outputNode=${this.outputNode}></gdm-live-audio-visuals-3d>
+      ${this.ttsDownloading ? html`<div style="position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#111; border:1px solid #333; color:#fff; padding:8px 12px; border-radius:8px; font-size:12px; z-index: 20;">Downloading voice… ${this.ttsDownloadProgress}%</div>` : ''}
     `;
   }
 
