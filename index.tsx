@@ -91,6 +91,8 @@ export class GdmLiveAudio extends LitElement {
   @state() inputNode = this.inputAudioContext.createGain();
   @state() outputNode = this.outputAudioContext.createGain();
   private nextStartTime = 0;
+  @state() chunksSent = 0;
+  @state() bytesSent = 0;
   private audioEvents = 0;
   private mediaStream: MediaStream;
   private sourceNode: AudioBufferSourceNode;
@@ -1327,6 +1329,7 @@ export class GdmLiveAudio extends LitElement {
         interim_results: true,
         vad_events: true,
         endpointing: 1000,
+        channels: 1,
         // Important for browser MediaRecorder (WebM/Opus)
         encoding: 'opus',
         sample_rate: 48000,
@@ -1337,7 +1340,16 @@ export class GdmLiveAudio extends LitElement {
       conn.on(LiveTranscriptionEvents.Open, async () => {
         this.dgConnected = true;
         // 3) start microphone capture
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        try { await this.inputAudioContext.resume(); } catch {}
+        try { await this.outputAudioContext.resume(); } catch {}
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            noiseSuppression: false,
+            echoCancellation: false,
+            autoGainControl: false
+          } as any
+        });
         this.mediaStream = stream;
         // Choose best supported mimeType for this browser
         let mimeType: string | undefined;
@@ -1363,16 +1375,21 @@ export class GdmLiveAudio extends LitElement {
           const micNode = this.inputAudioContext.createMediaStreamSource(stream);
           micNode.connect(this.inputNode);
         } catch {}
+        this.bytesSent = 0; this.chunksSent = 0;
         rec.ondataavailable = async (e: BlobEvent) => {
           if (!e.data.size || this.dgConn?.getReadyState?.() !== 1) return;
-          const buf = await e.data.arrayBuffer();
-          try { this.dgConn.send(buf); } catch { }
+          try {
+            const buf = await e.data.arrayBuffer();
+            this.bytesSent += buf.byteLength; this.chunksSent += 1;
+            this.dgConn.send(buf);
+          } catch {}
         };
         rec.start(250);
         // Keep the socket warm during long pauses
         try { keepAliveTimer = setInterval(() => { try { conn.keepAlive && conn.keepAlive(); } catch { } }, 5000); } catch { }
         // UI state
         this.isRecording = true;
+        this.transcriptStartIdx = this.currentTranscript.length;
         this.updateStatus('Live STT started. Speak now.');
         this.startTimer();
         if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch { } }
