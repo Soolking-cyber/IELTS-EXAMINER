@@ -8,7 +8,7 @@
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
-import { preparePiper, speakWithPiper, isVoiceCached, clearVoiceCache } from './piperWeb';
+import { preparePiper, isVoiceCached, clearVoiceCache, synthesizeToWavBlob } from './piperWeb';
 import './visual-3d';
 import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -906,6 +906,22 @@ export class GdmLiveAudio extends LitElement {
     this.nextStartTime = 0;
   }
 
+  private async playWithPiperAndTrack(text: string) {
+    if (!text || !text.trim()) return;
+    try { await this.outputAudioContext.resume(); } catch {}
+    const wav = await synthesizeToWavBlob(text);
+    const arr = await wav.arrayBuffer();
+    const buffer = await this.outputAudioContext.decodeAudioData(arr.slice(0));
+    const source = this.outputAudioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.outputNode);
+    this.sources.add(source);
+    source.start();
+    await new Promise<void>((resolve) => { source.onended = () => resolve(); });
+    try { source.disconnect(); } catch {}
+    this.sources.delete(source);
+  }
+
   private async speakPart1() {
     if (!this.part1Set || this.part1Set.length === 0) return;
     const lines: string[] = [];
@@ -918,7 +934,7 @@ export class GdmLiveAudio extends LitElement {
     });
     for (const line of lines) {
       this.addExaminer(line);
-      try { await speakWithPiper(line, this.outputAudioContext, this.outputNode); } catch {}
+      try { await this.playWithPiperAndTrack(line); } catch {}
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -930,7 +946,7 @@ export class GdmLiveAudio extends LitElement {
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
     for (const line of lines) {
       this.addExaminer(line);
-      try { await speakWithPiper(line, this.outputAudioContext, this.outputNode); } catch {}
+      try { await this.playWithPiperAndTrack(line); } catch {}
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -1268,6 +1284,8 @@ export class GdmLiveAudio extends LitElement {
 
   private cleanupWs() {
     try { this.recorder && this.recorder.stop(); } catch {}
+    // stop any ongoing TTS immediately
+    this.cancelSpeaking();
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
     this.recorder = null;
     this.micProcessor = null as any;
@@ -1292,7 +1310,7 @@ export class GdmLiveAudio extends LitElement {
           const { text: reply } = await r.json();
           if (reply) {
             this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
-            try { await speakWithPiper(reply, this.outputAudioContext, this.outputNode); } catch {}
+            try { await this.playWithPiperAndTrack(reply); } catch {}
           }
         }
       } catch {}

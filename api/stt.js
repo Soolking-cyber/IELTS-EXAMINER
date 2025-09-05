@@ -10,7 +10,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
   try {
     const apiKey = process.env.DEEPGRAM_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: 'Missing DEEPGRAM_API_KEY' });
+    if (!apiKey) return res.status(500).json({ error: 'Missing DEEPGRAM_API_KEY', hint: 'Set DEEPGRAM_API_KEY in your Vercel environment (Project Settings → Environment Variables) and redeploy.' });
 
     // Extract raw audio bytes + content type
     let contentType = req.headers['content-type'] || 'application/octet-stream';
@@ -36,8 +36,15 @@ module.exports = async function handler(req, res) {
       body
     });
     if (!r.ok) {
-      const err = await r.text().catch(() => '');
-      return res.status(r.status).send(err || 'Deepgram error');
+      let payload = null;
+      let text = '';
+      try { payload = await r.json(); } catch { try { text = await r.text(); } catch {} }
+      return res.status(r.status).json({
+        error: 'Deepgram error',
+        status: r.status,
+        detail: payload || text || 'Unknown error',
+        hint: 'Verify DEEPGRAM_API_KEY is valid and belongs to the correct project. REST requires a standard API key (not a realtime-scoped token).'
+      });
     }
     const dg = await r.json();
     const text = dg?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
@@ -46,4 +53,3 @@ module.exports = async function handler(req, res) {
     res.status(500).json({ error: 'STT failure', detail: String(e && e.message || e) });
   }
 }
-
