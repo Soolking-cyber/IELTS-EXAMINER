@@ -8,7 +8,7 @@
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
-import { ensurePiper, speakWithPiper } from './piperWeb';
+import { preparePiper, speakWithPiper } from './piperWeb';
 import './visual-3d';
 import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -1230,7 +1230,7 @@ export class GdmLiveAudio extends LitElement {
     // Prepare Piper (download voice with small progress UI)
     try {
       this.ttsDownloading = true; this.ttsDownloadProgress = 0;
-      await ensurePiper((p: any) => {
+      await preparePiper((p: any) => {
         if (p && p.total) this.ttsDownloadProgress = Math.min(100, Math.round((p.loaded / p.total) * 100));
       });
     } catch {} finally { this.ttsDownloading = false; }
