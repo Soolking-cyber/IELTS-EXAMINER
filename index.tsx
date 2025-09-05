@@ -1259,7 +1259,7 @@ export class GdmLiveAudio extends LitElement {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 }, video: false });
       this.mediaStream = stream;
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       this.recorder = mr;
       this.transcriptStartIdx = this.currentTranscript.length;
       mr.ondataavailable = (e: BlobEvent) => {
@@ -1325,13 +1325,18 @@ export class GdmLiveAudio extends LitElement {
       while (this.chunkQueue.length > 0) {
         const blob = this.chunkQueue.shift()!;
         try {
-          const buf = await blob.arrayBuffer();
-          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-          const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64: b64, contentType: blob.type || 'audio/webm' }) });
+          const b64 = await this.blobToBase64(blob);
+          const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base64: b64, contentType: (blob.type || 'audio/webm;codecs=opus') }) });
           if (res.ok) {
             const { text } = await res.json();
             const t = (text || '').trim();
             if (t) this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text: t }];
+          } else {
+            try {
+              const err = await res.json();
+              console.warn('STT error', err);
+              this.updateError(err?.detail?.error || err?.error || `STT ${res.status}`);
+            } catch {}
           }
         } catch {}
         await new Promise(r => setTimeout(r, 20));
@@ -1339,6 +1344,21 @@ export class GdmLiveAudio extends LitElement {
     } finally {
       this.chunkSending = false;
     }
+  }
+
+  private blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('read-failed'));
+      fr.onload = () => {
+        try {
+          const s = String(fr.result || '');
+          const idx = s.indexOf(',');
+          resolve(idx >= 0 ? s.slice(idx + 1) : s);
+        } catch (e) { reject(e as any); }
+      };
+      fr.readAsDataURL(blob);
+    });
   }
 
   // Old STT proxy removed
