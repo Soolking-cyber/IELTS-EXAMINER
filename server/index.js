@@ -2,40 +2,23 @@ import 'dotenv/config';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { createClient } from '@deepgram/sdk';
 import { OpenAI } from 'openai';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const PORT = Number(process.env.WS_PORT || process.env.PORT || 8787);
-const SAMPLE_RATE = 16000;
 
 // OpenAI client (LLM logic step)
 const openaiKey = process.env.OPENAI_API_KEY || process.env.OPENAI_PROJECT_API_KEY || process.env.OPENAI;
 const LLM_MODEL = process.env.LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const openai = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
 
-// Vosk ASR (optional, required for spec)
-let voskAvailable = false;
-let Vosk;
-let voskModel;
-try {
-  // optional dependency; may fail if not installed
-  Vosk = await import('vosk').then(m => m.default || m);
-  const modelPath = process.env.VOSK_MODEL_PATH || path.join(__dirname, 'models', 'vosk-model-small-en-us-0.15');
-  if (!fs.existsSync(modelPath)) {
-    console.warn('[server] Vosk model not found at', modelPath);
-  } else {
-    Vosk.setLogLevel(0);
-    voskModel = new Vosk.Model(modelPath);
-    voskAvailable = true;
-    console.log('[server] Vosk ready:', modelPath);
-  }
-} catch (e) {
-  console.warn('[server] Vosk not available (install failed or missing).', e?.message || e);
+// Deepgram ASR setup
+const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
+const deepgramAvailable = !!deepgramApiKey;
+if (deepgramAvailable) {
+  console.log('[server] Deepgram ready');
+} else {
+  console.warn('[server] Deepgram not available - DEEPGRAM_API_KEY not set');
 }
 
 // Piper TTS helper: spawn piper and stream WAV to buffer
@@ -84,16 +67,12 @@ async function ieltsLogic(part, lastUserText) {
   }
 }
 
-function pcm16leToFloat32(int16) {
-  const out = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) out[i] = Math.max(-1, int16[i] / 32768);
-  return out;
-}
+
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
-    res.end(JSON.stringify({ ok: true, vosk: !!voskAvailable, llm: !!openai }));
+    res.end(JSON.stringify({ ok: true, deepgram: !!deepgramAvailable, llm: !!openai }));
   } else if (req.url === '/version') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ielts-audio-server 0.1.0');
@@ -109,8 +88,7 @@ server.listen(PORT, () => {
 
 wss.on('connection', (ws) => {
   console.log('[server] client connected');
-  let recognizer = null;
-  let lastPartialAt = 0;
+  let deepgramConnection = null;
   let part = 'part1';
   let closed = false;
   let lastFinalText = '';
@@ -126,12 +104,58 @@ wss.on('connection', (ws) => {
         const msg = JSON.parse(Buffer.isBuffer(data) ? data.toString('utf8') : data);
         if (msg.type === 'start') {
           part = msg.session?.part || 'part1';
-          if (voskAvailable) {
-            recognizer = new Vosk.Recognizer({ model: voskModel, sampleRate: SAMPLE_RATE });
-          } else {
-            recognizer = null;
+          
+          // Initialize Deepgram connection
+          if (deepgramAvailable) {
+            try {
+              const deepgram = createClient(deepgramApiKey);
+              deepgramConnection = deepgram.listen.live({
+                model: 'nova-3',
+                language: 'en',
+                smart_format: true,
+                punctuate: true,
+                interim_results: true,
+                vad_events: true,
+                endpointing: '1000',
+                encoding: 'linear16',
+                sample_rate: 16000,
+                channels: 1
+              });
+
+              deepgramConnection.on('open', () => {
+                console.log('[server] Deepgram connection opened');
+              });
+
+              deepgramConnection.on('transcript', (data) => {
+                const alt = data?.channel?.alternatives?.[0];
+                if (!alt) return;
+                const text = (alt.transcript || '').trim();
+                if (!text) return;
+
+                if (data.is_final) {
+                  lastFinalText = text;
+                  sendJson({ type: 'stt', partial: text, final: true });
+                } else {
+                  sendJson({ type: 'stt', partial: text, final: false });
+                }
+              });
+
+              deepgramConnection.on('error', (error) => {
+                console.error('[server] Deepgram error:', error);
+                sendJson({ type: 'error', error: 'deepgram_error', detail: error?.message || String(error) });
+              });
+
+              deepgramConnection.on('close', () => {
+                console.log('[server] Deepgram connection closed');
+              });
+
+            } catch (e) {
+              console.error('[server] Failed to initialize Deepgram:', e);
+              deepgramConnection = null;
+            }
           }
-          sendJson({ type: 'ready', asr: !!recognizer, tts: true, llm: !!openai });
+          
+          sendJson({ type: 'ready', asr: !!deepgramConnection, tts: true, llm: !!openai });
         } else if (msg.type === 'say' && typeof msg.text === 'string' && msg.text.trim()) {
           // One-off TTS for client prompts
           try {
@@ -146,42 +170,29 @@ wss.on('connection', (ws) => {
             sendJson({ type: 'error', error: 'piper_failed', detail: e?.message || String(e) });
           }
         } else if (msg.type === 'stop') {
-          // finalize ASR
-          let finalText = lastFinalText;
-          if (recognizer) {
+          // Close Deepgram connection and finalize
+          if (deepgramConnection) {
             try {
-              const res = recognizer.finalResult();
-              finalText = (res?.text || '').trim() || finalText;
+              deepgramConnection.close();
             } catch {}
-            try { recognizer.free(); } catch {}
+            deepgramConnection = null;
           }
-          if (finalText) sendJson({ type: 'stt_final', text: finalText });
+          
+          if (lastFinalText) sendJson({ type: 'stt_final', text: lastFinalText });
 
           // logic only; client handles TTS via browser Piper
-          const reply = await ieltsLogic(part, finalText || '');
+          const reply = await ieltsLogic(part, lastFinalText || '');
           sendJson({ type: 'llm', text: reply });
         }
         return;
       }
-      // Binary: expect Int16LE PCM mono @ 16kHz
-      if (recognizer) {
-        const buf = Buffer.from(data);
-        const int16 = new Int16Array(buf.buffer, buf.byteOffset, buf.byteLength / 2);
-        // Vosk expects Float32? Vosk node accepts Int16 array via acceptWaveform
-        const ok = recognizer.acceptWaveform(int16);
-        const now = Date.now();
-        if (ok) {
-          const res = recognizer.result();
-          const text = (res?.text || '').trim();
-          if (text) {
-            lastFinalText = text;
-            sendJson({ type: 'stt', partial: text, final: true });
-          }
-        } else if (now - lastPartialAt > 350) {
-          const partial = recognizer.partialResult();
-          const pt = (partial?.partial || '').trim();
-          if (pt) sendJson({ type: 'stt', partial: pt });
-          lastPartialAt = now;
+      
+      // Binary: expect Int16LE PCM mono @ 16kHz - send to Deepgram
+      if (deepgramConnection && deepgramConnection.getReadyState() === 1) {
+        try {
+          deepgramConnection.send(data);
+        } catch (e) {
+          console.error('[server] Failed to send audio to Deepgram:', e);
         }
       }
     } catch (e) {
@@ -191,6 +202,9 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     closed = true;
-    try { recognizer?.free?.(); } catch {}
+    if (deepgramConnection) {
+      try { deepgramConnection.close(); } catch {}
+      deepgramConnection = null;
+    }
   });
 });

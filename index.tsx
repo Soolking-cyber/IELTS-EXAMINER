@@ -5,9 +5,9 @@
  */
 
 // Google GenAI removed
-import {LitElement, css, html} from 'lit';
-import {customElement, property, state} from 'lit/decorators.js';
-import {createBlob, decode, decodeAudioData} from './utils';
+import { LitElement, css, html } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+import { createBlob, decode, decodeAudioData } from './utils';
 import { createClient as createDeepgramClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import { preparePiper, isVoiceCached, clearVoiceCache, synthesizeToWavBlob } from './piperWeb';
 import './visual-3d';
@@ -37,7 +37,7 @@ interface TestRecord {
 
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
-  @property({reflect: true})
+  @property({ reflect: true })
   @state()
   isRecording = false;
 
@@ -78,15 +78,15 @@ export class GdmLiveAudio extends LitElement {
 
   private timerInterval: any = null;
   private preparationTimerInterval: any = null;
-  private readonly partDurations = {part1: 300, part2: 120, part3: 300}; // in seconds
+  private readonly partDurations = { part1: 300, part2: 120, part3: 300 }; // in seconds
 
   // Removed Google GenAI session
   // FIX: Property 'webkitAudioContext' does not exist on type 'Window & typeof globalThis'. Cast to any to allow fallback.
   private inputAudioContext = new (window.AudioContext ||
-    (window as any).webkitAudioContext)({sampleRate: 16000});
+    (window as any).webkitAudioContext)({ sampleRate: 16000 });
   // FIX: Property 'webkitAudioContext' does not exist on type 'Window & typeof globalThis'. Cast to any to allow fallback.
   private outputAudioContext = new (window.AudioContext ||
-    (window as any).webkitAudioContext)({sampleRate: 24000});
+    (window as any).webkitAudioContext)({ sampleRate: 24000 });
   @state() inputNode = this.inputAudioContext.createGain();
   @state() outputNode = this.outputAudioContext.createGain();
   private nextStartTime = 0;
@@ -118,7 +118,7 @@ export class GdmLiveAudio extends LitElement {
       document.head.appendChild(s);
     });
   }
-  
+
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
@@ -781,7 +781,7 @@ export class GdmLiveAudio extends LitElement {
     super.connectedCallback();
     this.setupAuth();
     this.loadLocalHistory();
-    
+
   }
 
   private async setupAuth() {
@@ -819,9 +819,9 @@ export class GdmLiveAudio extends LitElement {
     await supabase.auth.signOut();
   }
 
-  
 
-  
+
+
 
   // Guest mode removed
 
@@ -901,7 +901,7 @@ export class GdmLiveAudio extends LitElement {
   private cancelSpeaking() {
     this.speakCancel = true;
     for (const source of this.sources.values()) {
-      try { source.stop(); } catch {}
+      try { source.stop(); } catch { }
       this.sources.delete(source);
     }
     this.nextStartTime = 0;
@@ -909,7 +909,7 @@ export class GdmLiveAudio extends LitElement {
 
   private async playWithPiperAndTrack(text: string) {
     if (!text || !text.trim()) return;
-    try { await this.outputAudioContext.resume(); } catch {}
+    try { await this.outputAudioContext.resume(); } catch { }
     const wav = await synthesizeToWavBlob(text);
     const arr = await wav.arrayBuffer();
     const buffer = await this.outputAudioContext.decodeAudioData(arr.slice(0));
@@ -919,7 +919,7 @@ export class GdmLiveAudio extends LitElement {
     this.sources.add(source);
     source.start();
     await new Promise<void>((resolve) => { source.onended = () => resolve(); });
-    try { source.disconnect(); } catch {}
+    try { source.disconnect(); } catch { }
     this.sources.delete(source);
   }
 
@@ -935,7 +935,7 @@ export class GdmLiveAudio extends LitElement {
     });
     for (const line of lines) {
       this.addExaminer(line);
-      try { await this.playWithPiperAndTrack(line); } catch {}
+      try { await this.playWithPiperAndTrack(line); } catch { }
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -947,7 +947,7 @@ export class GdmLiveAudio extends LitElement {
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
     for (const line of lines) {
       this.addExaminer(line);
-      try { await this.playWithPiperAndTrack(line); } catch {}
+      try { await this.playWithPiperAndTrack(line); } catch { }
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -1052,7 +1052,7 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  // Browser SpeechRecognition removed; WS Vosk handles STT
+  // Browser SpeechRecognition removed; WS Deepgram handles STT
 
   private async selectPart(part: 'part1' | 'part2' | 'part3') {
     if (this.isRecording || this.isPreparing) return;
@@ -1228,7 +1228,7 @@ export class GdmLiveAudio extends LitElement {
     this.isPreparing = false;
   }
 
-  
+
 
 
 
@@ -1246,7 +1246,7 @@ export class GdmLiveAudio extends LitElement {
     const dataSize = int16.length * 2;
     const buf = new ArrayBuffer(44 + dataSize);
     const view = new DataView(buf);
-    const writeStr = (o: number, s: string) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
+    const writeStr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
     writeStr(0, 'RIFF');
     view.setUint32(4, 36 + dataSize, true);
     writeStr(8, 'WAVE');
@@ -1280,7 +1280,7 @@ export class GdmLiveAudio extends LitElement {
       } else {
         await preparePiper();
       }
-    } catch {} finally { this.ttsDownloading = false; }
+    } catch { } finally { this.ttsDownloading = false; }
     // Start Deepgram Live STT via SDK (WebSocket) with grant token
     try {
       // 1) get short-lived access token via grant (preferred in prod)
@@ -1301,10 +1301,10 @@ export class GdmLiveAudio extends LitElement {
                 const json2 = await grant2.json().catch(() => ({}));
                 accessToken = (json2?.access_token || json2?.token || '').trim() || undefined;
               }
-            } catch {}
+            } catch { }
           }
         }
-      } catch {}
+      } catch { }
       // 1b) fallback for local Vite dev without serverless APIs
       if (!accessToken) {
         const fallback = (process as any)?.env?.DEEPGRAM_FRONTEND_TOKEN as string | undefined;
@@ -1315,8 +1315,8 @@ export class GdmLiveAudio extends LitElement {
       if (!accessToken) {
         throw new Error('Deepgram access token missing. Run with serverless APIs (vercel dev) or set DEEPGRAM_FRONTEND_TOKEN in .env.local');
       }
-      // Deepgram SDK expects an apiKey param; pass the grant token or fallback key here
-      const dg = createDeepgramClient({ apiKey: accessToken });
+      // Deepgram SDK expects the API key as the first parameter
+      const dg = createDeepgramClient(accessToken);
       // 2) connect to Live Transcription
       const conn = dg.listen.live({
         model: 'nova-3',
@@ -1325,7 +1325,7 @@ export class GdmLiveAudio extends LitElement {
         punctuate: true,
         interim_results: true,
         vad_events: true,
-        endpointing: '1000',
+        endpointing: 1000,
         // Important for browser MediaRecorder (WebM/Opus)
         encoding: 'opus',
         sample_rate: 48000,
@@ -1343,17 +1343,17 @@ export class GdmLiveAudio extends LitElement {
         rec.ondataavailable = async (e: BlobEvent) => {
           if (!e.data.size || this.dgConn?.getReadyState?.() !== 1) return;
           const buf = await e.data.arrayBuffer();
-          try { this.dgConn.send(buf); } catch {}
+          try { this.dgConn.send(buf); } catch { }
         };
         rec.start(250);
         // Keep the socket warm during long pauses
-        try { keepAliveTimer = setInterval(() => { try { conn.keepAlive && conn.keepAlive(); } catch {} }, 5000); } catch {}
+        try { keepAliveTimer = setInterval(() => { try { conn.keepAlive && conn.keepAlive(); } catch { } }, 5000); } catch { }
         // UI state
         this.isRecording = true;
         this.updateStatus('Live STT started. Speak now.');
         this.startTimer();
-        if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
-        else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
+        if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch { } }
+        else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch { } }
       });
 
       conn.on(LiveTranscriptionEvents.Transcript, async (msg: any) => {
@@ -1365,15 +1365,15 @@ export class GdmLiveAudio extends LitElement {
           this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
           try {
             const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
-            const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` } ] }) });
+            const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` }] }) });
             if (r.ok) {
               const { text: reply } = await r.json();
               if (reply) {
                 this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
-                try { await this.playWithPiperAndTrack(reply); } catch {}
+                try { await this.playWithPiperAndTrack(reply); } catch { }
               }
             }
-          } catch {}
+          } catch { }
         }
       });
 
@@ -1383,8 +1383,8 @@ export class GdmLiveAudio extends LitElement {
       });
       conn.on(LiveTranscriptionEvents.Close, () => {
         this.dgConnected = false;
-        try { this.recorder?.stop(); } catch {}
-        if (keepAliveTimer) { try { clearInterval(keepAliveTimer); } catch {}; keepAliveTimer = null; }
+        try { this.recorder?.stop(); } catch { }
+        if (keepAliveTimer) { try { clearInterval(keepAliveTimer); } catch { }; keepAliveTimer = null; }
       });
     } catch (e) {
       console.error('Failed to start Live STT', e);
@@ -1394,11 +1394,11 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private cleanupWs() {
-    try { this.recorder && this.recorder.stop(); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch { }
     // stop any ongoing TTS immediately
     this.cancelSpeaking();
-    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
-    try { this.dgConn && this.dgConn.close && this.dgConn.close(); } catch {}
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch { }
+    try { this.dgConn && this.dgConn.close && this.dgConn.close(); } catch { }
     this.recorder = null;
     this.dgConn = null;
     this.dgConnected = false;
@@ -1409,23 +1409,23 @@ export class GdmLiveAudio extends LitElement {
 
   private async stopLiveSession() {
     if (!this.isRecording) return;
-    try { this.recorder && this.recorder.stop(); } catch {}
-    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch { }
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch { }
     // Build a combined user text from this session
     const userTexts = this.currentTranscript.slice(this.transcriptStartIdx).filter(e => e.speaker === 'user').map(e => e.text);
     const combined = userTexts.join(' ').trim();
     if (combined) {
       try {
         const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
-        const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${combined}` } ] }) });
+        const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${combined}` }] }) });
         if (r.ok) {
           const { text: reply } = await r.json();
           if (reply) {
             this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
-            try { await this.playWithPiperAndTrack(reply); } catch {}
+            try { await this.playWithPiperAndTrack(reply); } catch { }
           }
         }
-      } catch {}
+      } catch { }
     }
     this.cleanupWs();
   }
@@ -1448,9 +1448,9 @@ export class GdmLiveAudio extends LitElement {
               const err = await res.json();
               console.warn('STT error', err);
               this.updateError(err?.detail?.error || err?.error || `STT ${res.status}`);
-            } catch {}
+            } catch { }
           }
-        } catch {}
+        } catch { }
         await new Promise(r => setTimeout(r, 20));
       }
     } finally {
@@ -1532,7 +1532,7 @@ export class GdmLiveAudio extends LitElement {
   private reset() {
     if (this.isRecording) return;
     // Stop any ongoing live session and timers
-    try { this.stopLiveSession(); } catch {}
+    try { this.stopLiveSession(); } catch { }
     this.stopRecording();
     this.stopTimer();
     this.stopPreparationTimer();
@@ -1554,8 +1554,8 @@ export class GdmLiveAudio extends LitElement {
     this.updateStatus('Session cleared.');
   }
   stopRecording() {
-    try { this.recorder && this.recorder.stop(); } catch {}
-    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    try { this.recorder && this.recorder.stop(); } catch { }
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch { }
     this.recorder = null;
   }
 
@@ -1568,14 +1568,14 @@ export class GdmLiveAudio extends LitElement {
     return html`
       <ul class="history-list">
         ${this.testHistory.map(
-          (test) => html`
+      (test) => html`
             <li @click=${() => (this.selectedTest = test)}>
               <span class="test-name">${test.name}</span>
               <span class="test-date">${test.date}</span>
               <span class="test-score">Score: ${test.score}</span>
             </li>
           `,
-        )}
+    )}
       </ul>
     `;
   }
@@ -1593,15 +1593,14 @@ export class GdmLiveAudio extends LitElement {
         <h4>Transcript</h4>
         <div class="transcript">
           ${this.selectedTest.transcript.map(
-            (entry) => html`
+      (entry) => html`
               <div class="transcript-entry ${entry.speaker}">
-                <strong>${
-                  entry.speaker === 'user' ? 'You' : 'Examiner'
-                }:</strong>
+                <strong>${entry.speaker === 'user' ? 'You' : 'Examiner'
+        }:</strong>
                 <p>${entry.text}</p>
               </div>
             `,
-          )}
+    )}
           <!-- Live overlay lines -->
           <div id="live-overlay">
             ${this.liveLines.map(l => html`<div class="live-line ${l.role}">${l.text}</div>`)}
@@ -1619,17 +1618,17 @@ export class GdmLiveAudio extends LitElement {
           <button
             class="close-btn"
             @click=${() => {
-              this.isHistoryVisible = false;
-              this.selectedTest = null;
-            }}
+        this.isHistoryVisible = false;
+        this.selectedTest = null;
+      }}
             aria-label="Close history panel">
             &times;
           </button>
         </div>
         <div class="history-content">
           ${this.selectedTest
-            ? this.renderTestDetails()
-            : this.renderHistoryList()}
+        ? this.renderTestDetails()
+        : this.renderHistoryList()}
         </div>
       </div>
     `;
@@ -1662,12 +1661,12 @@ export class GdmLiveAudio extends LitElement {
       <div class="container">
         <div class="main-content-area">
           ${showPrompt
-            ? html`<div id="prompt-card">
+        ? html`<div id="prompt-card">
                 ${this.selectedPart === 'part1'
-                  ? this.renderPart1Card()
-                  : this.renderPart3Card()}
+            ? this.renderPart1Card()
+            : this.renderPart3Card()}
               </div>`
-            : ''}
+        : ''}
         </div>
 
         <div class="bottom-controls">
@@ -1683,17 +1682,15 @@ export class GdmLiveAudio extends LitElement {
             <button
               class=${this.selectedPart === 'part2' ? 'selected' : ''}
               @click=${() => this.selectPart('part2')}
-              ?disabled=${
-                this.isRecording || this.isPreparing || !this.part1Completed
-              }>
+              ?disabled=${this.isRecording || this.isPreparing || !this.part1Completed
+      }>
               Part 2
             </button>
             <button
               class=${this.selectedPart === 'part3' ? 'selected' : ''}
               @click=${() => this.selectPart('part3')}
-              ?disabled=${
-                this.isRecording || this.isPreparing || !this.part2Completed
-              }>
+              ?disabled=${this.isRecording || this.isPreparing || !this.part2Completed
+      }>
               Part 3
             </button>
           </div>
@@ -1714,18 +1711,17 @@ export class GdmLiveAudio extends LitElement {
             <button
               id="recordButton"
               @click=${this.toggleRecording}
-              ?disabled=${
-                !this.selectedPart || this.isPreparing || this.isScoring
-              }>
+              ?disabled=${!this.selectedPart || this.isPreparing || this.isScoring
+      }>
               ${this.isRecording
-                ? html`<svg
+        ? html`<svg
                     viewBox="0 0 100 100"
                     width="32px"
                     height="32px"
                     fill="white">
                     <rect x="15" y="15" width="70" height="70" rx="8" />
                   </svg>`
-                : html`<svg
+        : html`<svg
                     viewBox="0 0 100 100"
                     width="36px"
                     height="36px"
@@ -1743,10 +1739,10 @@ export class GdmLiveAudio extends LitElement {
       </div>
       <div id="timer" ?hidden=${showOverlay}>
         ${this.isRecording || this.isPreparing
-          ? this.isPreparing
-            ? this.preparationTimerDisplay
-            : this.timerDisplay
-          : ''}
+        ? this.isPreparing
+          ? this.preparationTimerDisplay
+          : this.timerDisplay
+        : ''}
       </div>
       ${showOverlay
         ? html`<div id="cue-overlay">
@@ -1798,23 +1794,23 @@ export class GdmLiveAudio extends LitElement {
         
         <h4 style="margin:12px 0 6px;">Previous Scores</h4>
         ${scores.length === 0
-          ? html`<div style="color:#aaa;">No tests yet.</div>`
-          : html`<ul style="margin:0; padding-left:18px;">${scores.map((s) => html`<li>${s}</li>`)}</ul>`}
+        ? html`<div style="color:#aaa;">No tests yet.</div>`
+        : html`<ul style="margin:0; padding-left:18px;">${scores.map((s) => html`<li>${s}</li>`)}</ul>`}
 
         <div style="margin-top:16px;">
           <h4 style="margin:12px 0 6px;">Voice Cache</h4>
           <div style="color:#aaa; font-size:13px; margin-bottom:8px;">Downloaded Piper voice is kept for faster playback. Clear to force re-download.</div>
-          <button class="logout-btn" @click=${async () => { try { await clearVoiceCache(); this.updateStatus('Cleared downloaded voice. It will re-download on next use.'); } catch {} }}>Clear Downloaded Voice</button>
+          <button class="logout-btn" @click=${async () => { try { await clearVoiceCache(); this.updateStatus('Cleared downloaded voice. It will re-download on next use.'); } catch { } }}>Clear Downloaded Voice</button>
         </div>
       </div>
     `;
   }
 
-  
 
-  
-  private addLiveLine(text: string, role: 'user'|'ai') {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+
+
+  private addLiveLine(text: string, role: 'user' | 'ai') {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     this.liveLines = [{ id, text, role }, ...this.liveLines].slice(0, 8);
     setTimeout(() => {
       this.liveLines = this.liveLines.filter(l => l.id !== id);
@@ -1829,13 +1825,13 @@ export class GdmLiveAudio extends LitElement {
     return html`
       <h3>Part 1 Questions</h3>
       ${this.part1Set.map(
-        (g) => html`
+      (g) => html`
           <div class="topic">${g.topic}</div>
           <ol>
             ${g.questions.map((q) => html`<li>${q}</li>`)}
           </ol>
         `,
-      )}
+    )}
     `;
   }
 
