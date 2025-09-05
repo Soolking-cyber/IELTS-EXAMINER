@@ -1524,7 +1524,9 @@ export class GdmLiveAudio extends LitElement {
     this.updateStatus('Session cleared.');
   }
   stopRecording() {
-    throw new Error('Method not implemented.');
+    try { this.recorder && this.recorder.stop(); } catch {}
+    try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    this.recorder = null;
   }
 
   private renderHistoryList() {
