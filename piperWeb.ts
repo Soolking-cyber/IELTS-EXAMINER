@@ -3,30 +3,45 @@
 
 let piperMod: any | null = null;
 export const VOICE_ID = 'en_GB-northern_english_male-medium';
-let preparing = false;
-let prepared = false;
+let loadingModule = false;
+let moduleReady = false;
 
 export type PiperProgress = (p: { url?: string; total?: number; loaded?: number }) => void;
 
-export async function preparePiper(onProgress?: PiperProgress): Promise<void> {
-  if (prepared) return;
-  if (!preparing) {
-    preparing = true;
+async function loadModuleOnce() {
+  if (moduleReady) return;
+  if (!loadingModule) {
+    loadingModule = true;
     piperMod = await import('https://cdn.jsdelivr.net/npm/@mintplex-labs/piper-tts-web/dist/piper-tts-web.js');
-    try {
-      await piperMod.download(VOICE_ID, onProgress);
-    } catch {}
-    prepared = true;
-    preparing = false;
+    moduleReady = true;
+    loadingModule = false;
   }
-  // If a second caller arrives while preparing, just await a tiny tick
-  while (!prepared) {
-    await new Promise(r => setTimeout(r, 50));
+  while (!moduleReady) await new Promise(r => setTimeout(r, 20));
+}
+
+export async function isVoiceCached(): Promise<boolean> {
+  await loadModuleOnce();
+  try {
+    const stored: string[] = await piperMod.stored();
+    return Array.isArray(stored) && stored.includes(VOICE_ID);
+  } catch { return false; }
+}
+
+export async function preparePiper(onProgress?: PiperProgress): Promise<void> {
+  await loadModuleOnce();
+  const cached = await isVoiceCached();
+  if (!cached) {
+    try { await piperMod.download(VOICE_ID, onProgress); } catch {}
   }
 }
 
+export async function clearVoiceCache(): Promise<void> {
+  await loadModuleOnce();
+  try { await piperMod.remove(VOICE_ID); } catch {}
+}
+
 export async function synthesizeToWavBlob(text: string): Promise<Blob> {
-  if (!piperMod) await preparePiper();
+  await loadModuleOnce();
   return await piperMod.predict({ voiceId: VOICE_ID, text });
 }
 

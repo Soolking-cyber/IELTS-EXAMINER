@@ -8,7 +8,7 @@
 import {LitElement, css, html} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
-import { preparePiper, speakWithPiper } from './piperWeb';
+import { preparePiper, speakWithPiper, isVoiceCached, clearVoiceCache } from './piperWeb';
 import './visual-3d';
 import { createClient, User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -1229,10 +1229,15 @@ export class GdmLiveAudio extends LitElement {
     if (this.isRecording || !this.selectedPart) return;
     // Prepare Piper (download voice with small progress UI)
     try {
-      this.ttsDownloading = true; this.ttsDownloadProgress = 0;
-      await preparePiper((p: any) => {
-        if (p && p.total) this.ttsDownloadProgress = Math.min(100, Math.round((p.loaded / p.total) * 100));
-      });
+      const cached = await isVoiceCached();
+      if (!cached) {
+        this.ttsDownloading = true; this.ttsDownloadProgress = 0;
+        await preparePiper((p: any) => {
+          if (p && p.total) this.ttsDownloadProgress = Math.min(100, Math.round((p.loaded / p.total) * 100));
+        });
+      } else {
+        await preparePiper();
+      }
     } catch {} finally { this.ttsDownloading = false; }
     // Start mic capture + MediaRecorder and send chunks to /api/stt
     try {
@@ -1648,6 +1653,12 @@ export class GdmLiveAudio extends LitElement {
         ${scores.length === 0
           ? html`<div style="color:#aaa;">No tests yet.</div>`
           : html`<ul style="margin:0; padding-left:18px;">${scores.map((s) => html`<li>${s}</li>`)}</ul>`}
+
+        <div style="margin-top:16px;">
+          <h4 style="margin:12px 0 6px;">Voice Cache</h4>
+          <div style="color:#aaa; font-size:13px; margin-bottom:8px;">Downloaded Piper voice is kept for faster playback. Clear to force re-download.</div>
+          <button class="logout-btn" @click=${async () => { try { await clearVoiceCache(); this.updateStatus('Cleared downloaded voice. It will re-download on next use.'); } catch {} }}>Clear Downloaded Voice</button>
+        </div>
       </div>
     `;
   }
