@@ -11,9 +11,18 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
   try {
     const key = process.env.DEEPGRAM_API_KEY;
-    const project = process.env.DEEPGRAM_PROJECT_ID;
     const ttl = Math.max(60, Math.min(3600, Number(process.env.DEEPGRAM_TOKEN_TTL || 600)));
-    if (!key || !project) return res.status(500).json({ error: 'Missing DEEPGRAM_API_KEY or DEEPGRAM_PROJECT_ID' });
+    if (!key) return res.status(500).json({ error: 'Missing DEEPGRAM_API_KEY' });
+    // Resolve project if not provided
+    let project = process.env.DEEPGRAM_PROJECT_ID;
+    if (!project) {
+      const pr = await fetch('https://api.deepgram.com/v1/projects', { headers: { 'Authorization': `Token ${key}` } });
+      if (!pr.ok) return res.status(pr.status).json({ error: 'Failed to list projects', detail: await pr.text().catch(()=> '') });
+      const pj = await pr.json();
+      const first = Array.isArray(pj?.projects) && pj.projects[0];
+      if (!first?.project_id) return res.status(500).json({ error: 'No projects available for this key' });
+      project = first.project_id;
+    }
     const r = await fetch(`https://api.deepgram.com/v1/projects/${project}/keys`, {
       method: 'POST',
       headers: { 'Authorization': `Token ${key}`, 'Content-Type': 'application/json' },
