@@ -60,22 +60,8 @@ export class GdmLiveAudio extends LitElement {
   @state() isScoring = false;
   @state() isProfileVisible = false;
   @state() profileTab: 'profile' | 'history' = 'profile';
-  @state() showTencentAIDemo = false;
-  // TRTC health overlay
-  @state() showTrtcHealth = false;
-  @state() trtcHealth: any = null;
-  @state() trtcHealthLoading = false;
   @state() maskSensitive = true;
-  // TRTC runtime configuration
-  @state() trtcRoomId: number | null = null;
-  @state() trtcUserId: string | null = null;
-  @state() trtcAgentId: string | null = null;
-  // Transcription indicator
-  @state() isTranscribing = false;
-  // Speech-to-text (browser)
-  private recognition: any = null;
-  private sttRestartOnEnd = false;
-  private lastSttRestartAt = 0;
+  // Browser SpeechRecognition removed
   // Supabase-driven question sets
   @state() part1Set: { topic: string; questions: string[] }[] = [];
   @state() part3Set: string[] = [];
@@ -106,7 +92,6 @@ export class GdmLiveAudio extends LitElement {
   private sourceNode: AudioBufferSourceNode;
   private mediaRecorder: MediaRecorder | null = null;
   private startingRecording = false;
-  private trtc: any = null;
   session: any;
   liveLines: any;
   // WS pipeline state
@@ -125,23 +110,7 @@ export class GdmLiveAudio extends LitElement {
       document.head.appendChild(s);
     });
   }
-  private async getTrtcSdk(): Promise<any> {
-    if ((window as any).TRTC?.create) return (window as any).TRTC;
-    // Prefer local vendored SDK, then fallback to official CDN
-    const bust = `v=${Date.now()}`;
-    const localUrl = `/trtc.js?${bust}`;
-    const officialUrl = `https://web.sdk.qcloud.com/trtc/webrtc/v5/dist/trtc.js?${bust}`;
-    try {
-      await this.loadScript(localUrl);
-      if ((window as any).TRTC?.create) return (window as any).TRTC;
-      console.warn('Local TRTC not initialized after load; trying CDN');
-    } catch (e) {
-      console.warn('Failed to load local TRTC SDK:', e);
-    }
-    await this.loadScript(officialUrl);
-    if ((window as any).TRTC?.create) return (window as any).TRTC;
-    throw new Error('TRTC SDK failed to load from local or official source');
-  }
+  // TRTC removed
   // Removed ScriptProcessorNode usage (deprecated)
   private sources = new Set<AudioBufferSourceNode>();
   private initialPrompt: string | null = null;
@@ -860,9 +829,7 @@ export class GdmLiveAudio extends LitElement {
     super.connectedCallback();
     this.setupAuth();
     this.loadLocalHistory();
-    this.loadTrtcConfig();
-    // Auto-check TRTC health on load (does not open overlay)
-    this.fetchTrtcHealth();
+    // TRTC removed
   }
 
   private async setupAuth() {
@@ -900,140 +867,9 @@ export class GdmLiveAudio extends LitElement {
     await supabase.auth.signOut();
   }
 
-  private showTencentDemo() {
-    this.showTencentAIDemo = true;
-  }
+  // Tencent demo removed
 
-  private closeTencentDemo() {
-    this.showTencentAIDemo = false;
-  }
-
-  private renderTencentDemo() {
-    if (!this.showTencentAIDemo) return '';
-    
-    const isCompatible = this.checkBrowserCompatibility();
-    
-    return html`
-      <div class="tencent-demo-overlay">
-        <div class="demo-header">
-          <h2>🤖 Tencent AI Conversation Demo</h2>
-          <button class="demo-close" @click=${this.closeTencentDemo}>×</button>
-        </div>
-        <div class="demo-content">
-          <div style="padding: 20px; text-align: center; color: #fff;">
-            <h3>Tencent AI Integration Status</h3>
-            
-            ${!isCompatible ? html`
-              <div style="background: #cc3300; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                <h4>⚠️ Browser Compatibility Issue</h4>
-                <p>TRTC requires a modern browser with WebRTC support.</p>
-                <p><strong>Recommended browsers:</strong> Chrome 56+, Firefox 44+, Safari 11+</p>
-                <p>The app will fallback to standard audio recording.</p>
-              </div>
-            ` : ''}
-            
-            <p>The Tencent AI conversation system has been integrated into your IELTS app.</p>
-            <p>Key features implemented:</p>
-            <ul style="text-align: left; max-width: 500px; margin: 20px auto;">
-              <li>${isCompatible ? '✅' : '⚠️'} TRTC SDK Integration</li>
-              <li>✅ UserSig Generation (Fixed)</li>
-              <li>${isCompatible ? '✅' : '⚠️'} Real-time Audio Communication</li>
-              <li>✅ AI Conversation API</li>
-              <li>✅ Speech-to-Text (Deepgram)</li>
-              <li>✅ Text-to-Speech (Cartesia)</li>
-              <li>✅ LLM Integration (Dify)</li>
-              <li>✅ Fallback Audio Recording</li>
-            </ul>
-            <p>The integration is now ready for testing within your IELTS speaking test parts.</p>
-            <button 
-              style="background: #0066cc; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; margin-top: 20px;"
-              @click=${this.closeTencentDemo}
-            >
-              Close Demo
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  // TRTC Health diagnostics
-  private async openTrtcHealth() {
-    this.showTrtcHealth = true;
-    await this.fetchTrtcHealth();
-  }
-  private closeTrtcHealth() { this.showTrtcHealth = false; }
-  private async fetchTrtcHealth() {
-    this.trtcHealthLoading = true;
-    try {
-      const res = await fetch('/api/trtc/health');
-      const json = await res.json();
-      this.trtcHealth = json;
-    } catch (e) {
-      this.trtcHealth = { ok: false, error: String(e) };
-    } finally {
-      this.trtcHealthLoading = false;
-      this.requestUpdate();
-    }
-  }
-  private renderTrtcHealth() {
-    if (!this.showTrtcHealth) return '';
-    const H = this.trtcHealth || {};
-    const ok = !!H.ok;
-    const maskify = (v: any) => {
-      const s = String(v ?? '');
-      if (!this.maskSensitive || !s) return s || '—';
-      const tail = s.slice(-3);
-      return `${'•'.repeat(Math.max(0, s.length - 3))}${tail}`;
-    };
-    return html`
-      <div class="tencent-demo-overlay">
-        <div class="demo-header">
-          <h2>TRTC Health</h2>
-          <button class="demo-close" @click=${this.closeTrtcHealth}>×</button>
-        </div>
-        <div class="demo-content">
-          <div style="padding: 20px; color: #fff; max-width: 800px; margin: 0 auto;">
-            ${this.trtcHealthLoading ? html`<p>Checking TRTC configuration…</p>` : html`
-              <p>Status: <strong style="color:${ok ? '#7CFC00' : '#ff6666'};">${ok ? 'OK' : 'Issue detected'}</strong></p>
-              <label style="display:inline-flex; align-items:center; gap:8px; margin:8px 0 12px 0; font-size:13px;">
-                <input type="checkbox" .checked=${this.maskSensitive} @change=${(e: any) => { this.maskSensitive = !!e.target.checked; }} />
-                Mask sensitive values
-              </label>
-              <div style="display:grid; grid-template-columns: 260px 1fr; gap:8px; align-items:center;">
-                <div>SDK App ID</div><div>${maskify(H.env?.sdkAppId)}</div>
-                <div>Has SDK Secret Key</div><div>${H.env?.hasSdkSecretKey ? 'Yes' : 'No'}</div>
-                <div>Cloud API Ready</div><div>${H.checks?.cloudApiReady ? 'Yes' : 'No (skipped)'}</div>
-                <div>UserSig OK</div><div>${H.checks?.userSigOk ? 'Yes' : 'No'}</div>
-                <div>UserSig Length</div><div>${H.checks?.userSigLength ?? 0}</div>
-                <div>Region</div><div>${maskify(H.env?.region)}</div>
-              </div>
-              ${Array.isArray(H.messages) && H.messages.length ? html`
-                <div style="margin-top:16px; background:#1a1a1a; padding:12px; border-radius:8px;">
-                  <strong>Messages</strong>
-                  <ul>
-                    ${H.messages.map((m:any) => html`<li>${m}</li>`)}
-                  </ul>
-                </div>
-              ` : ''}
-            `}
-            <div style="margin-top:20px; display:flex; gap:10px;">
-              <button class="demo-link" style="position:static; background:#0066cc;" @click=${() => this.fetchTrtcHealth()}>Recheck</button>
-              <button class="demo-link" style="position:static; background:#333;" @click=${this.closeTrtcHealth}>Close</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  private checkBrowserCompatibility(): boolean {
-    // Check for WebRTC support
-    const hasWebRTC = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-    const hasRTCPeerConnection = !!(window.RTCPeerConnection || (window as any).webkitRTCPeerConnection);
-    
-    return hasWebRTC && hasRTCPeerConnection;
-  }
+  // TRTC health removed
 
   // Guest mode removed
 
@@ -1129,7 +965,7 @@ export class GdmLiveAudio extends LitElement {
         lines.push(`Question ${qi + 1}: ${q}`);
       });
     });
-    await this.speakLinesWithTTS(lines);
+    lines.forEach(line => this.addExaminer(line));
   }
 
   private async speakPart3() {
@@ -1137,86 +973,10 @@ export class GdmLiveAudio extends LitElement {
     const lines: string[] = [];
     lines.push("Now Part 3. Let's discuss some broader questions.");
     this.part3Set.forEach((q, i) => lines.push(`Question ${i + 1}: ${q}`));
-    await this.speakLinesWithTTS(lines);
+    lines.forEach(line => this.addExaminer(line));
   }
 
-  private async speakLinesWithGemini(lines: string[]) {
-    await this.ensureSession();
-    if (!this.session) return;
-    this.speaking = true;
-    this.speakCancel = false;
-    for (const line of lines) {
-      if (this.speakCancel) break;
-      this.addExaminer(line);
-      const before = this.audioEvents;
-      // Send text message to Gemini Live session
-      try {
-        await this.session.send({ text: line });
-      } catch (e) {
-        console.error('Failed to send message to Gemini:', e);
-      }
-      // Wait until we receive at least one audio chunk or a short timeout
-      const start = performance.now();
-      while (this.audioEvents === before && performance.now() - start < 2000) {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      if (this.speakCancel) break;
-      // Small gap before next line to avoid overlap
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    this.speaking = false;
-  }
-
-  private async speakLinesWithTTS(lines: string[]) {
-    this.speaking = true;
-    this.speakCancel = false;
-    for (const line of lines) {
-      if (this.speakCancel) break;
-      this.addExaminer(line);
-      try {
-        const res = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: line }),
-        });
-        if (!res.ok) {
-          try { console.warn('TTS error', res.status, await res.text()); } catch {}
-          await this.speakLinesWithGemini([line]);
-          continue;
-        }
-        const data = await res.json();
-        const b64 = data.audio || data.wav || data.data;
-        const mime = data.mimeType || data.mimetype || 'audio/wav';
-        if (!b64) {
-          await this.speakLinesWithGemini([line]);
-          continue;
-        }
-        await this.playTtsBase64(b64, mime);
-      } catch (e) {
-        console.warn('TTS fetch failed', e);
-        await this.speakLinesWithGemini([line]);
-      }
-      if (this.speakCancel) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    this.speaking = false;
-  }
-
-  private async playTtsBase64(b64: string, mime: string) {
-    const src = `data:${mime};base64,${b64}`;
-    const audio = new Audio();
-    audio.src = src;
-    audio.crossOrigin = 'anonymous';
-    try { await this.outputAudioContext.resume(); } catch {}
-    const source = this.outputAudioContext.createMediaElementSource(audio);
-    source.connect(this.outputNode);
-    await new Promise<void>((resolve) => {
-      const onEnd = () => { audio.removeEventListener('ended', onEnd); resolve(); };
-      audio.addEventListener('ended', onEnd);
-      audio.play().catch(() => resolve());
-    });
-    try { source.disconnect(); } catch {}
-  }
+  // Old TTS/LLM methods removed (Gemini/TTS endpoints)
 
   private updateStatus(msg: string) {
     this.error = '';
@@ -1316,67 +1076,7 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  // --- Browser Speech-to-Text ---
-  private startSpeechRecognition() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn('SpeechRecognition API not available');
-      return;
-    }
-    if (!this.recognition) {
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true;
-      this.recognition.lang = 'en-US';
-      this.recognition.onstart = () => {
-        this.isTranscribing = true;
-      };
-      this.recognition.onresult = (event: any) => {
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i];
-          const text = res[0]?.transcript?.trim();
-          if (!text) continue;
-          if (res.isFinal) {
-            this.currentTranscript = [
-              ...this.currentTranscript,
-              { speaker: 'user', text },
-            ];
-          }
-        }
-      };
-      this.recognition.onerror = (e: any) => {
-        const err = e?.error || e;
-        const transient = err === 'no-speech' || err === 'network' || err === 'aborted';
-        if (!transient) {
-          console.warn('STT error', err);
-        }
-        // Throttle restarts to avoid loops
-        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-        if (this.isRecording && transient && now - this.lastSttRestartAt > 1000) {
-          this.lastSttRestartAt = now;
-          try { this.recognition.stop(); } catch {}
-          setTimeout(() => {
-            if (this.isRecording) {
-              try { this.recognition.start(); } catch {}
-            }
-          }, 300);
-        }
-      };
-      this.recognition.onend = () => {
-        if (this.isRecording) {
-          try { this.recognition.start(); } catch {}
-          this.isTranscribing = true;
-        } else {
-          this.isTranscribing = false;
-        }
-      };
-    }
-    try { this.recognition.start(); } catch {}
-  }
-
-  private stopSpeechRecognition() {
-    try { this.recognition && this.recognition.stop(); } catch {}
-  }
+  // Browser SpeechRecognition removed; WS Vosk handles STT
 
   private async selectPart(part: 'part1' | 'part2' | 'part3') {
     if (this.isRecording || this.isPreparing) return;
@@ -1661,44 +1361,7 @@ export class GdmLiveAudio extends LitElement {
     this.cleanupWs();
   }
 
-  private async transcribeChunk(blob: Blob) {
-    let base = '/api/stt';
-    const direct = (process.env.STT_URL || '').trim();
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname;
-      const isVercel = /vercel\.app$/i.test(host);
-      if (!isVercel && direct) base = direct.replace(/\/$/, '') + '/stt';
-    } else if (direct) {
-      base = direct.replace(/\/$/, '') + '/stt';
-    }
-    try {
-      const fd = new FormData();
-      const file = new File([blob], 'chunk.webm', { type: blob.type || 'audio/webm' });
-      fd.append('audio', file);
-      const qs = new URLSearchParams({ language: 'en' }).toString();
-      const res = await fetch(`${base}?${qs}`, {
-        method: 'POST',
-        body: fd,
-      });
-      if (!res.ok) {
-        try {
-          const errTxt = await res.text();
-          console.warn('STT proxy error', res.status, errTxt);
-        } catch {}
-        return;
-      }
-      const json = await res.json();
-      const text = (json && json.text || '').trim();
-      if (text) {
-        this.currentTranscript = [
-          ...this.currentTranscript,
-          { speaker: 'user', text },
-        ];
-      }
-    } catch (_) {
-      // ignore network errors
-    }
-  }
+  // Old STT proxy removed
   private toggleRecording() {
     if (this.isRecording) {
       this.stopTencentConversation();
@@ -1966,11 +1629,7 @@ export class GdmLiveAudio extends LitElement {
             <div style="width: 56px; height: 56px;"></div>
           </div>
           <div id="status">${this.error || this.status}</div>
-          <div class="footer-status" title="TRTC health">
-            <span class="status-pill ${this.trtcHealthLoading ? 'loading' : (this.trtcHealth ? (this.trtcHealth.ok ? 'ok' : 'bad') : 'loading')}"></span>
-            <span>TRTC</span>
-          </div>
-          ${this.isRecording ? html`<div style="color:#7ad7ff; font-size:12px;">${this.isTranscribing ? 'Transcribing…' : ''}</div>` : ''}
+          
         </div>
       </div>
       <div id="timer" ?hidden=${showOverlay}>
@@ -2035,21 +1694,7 @@ export class GdmLiveAudio extends LitElement {
     `;
   }
 
-  private loadTrtcConfig() {
-    try {
-      const raw = localStorage.getItem('trtc_config');
-      if (raw) {
-        const obj = JSON.parse(raw);
-        this.trtcRoomId = typeof obj.roomId === 'number' ? obj.roomId : (process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : null);
-        this.trtcUserId = obj.userId || process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2,8)}`;
-        this.trtcAgentId = obj.agentId || process.env.TENCENT_AGENT_ID || "robot_id";
-      } else {
-        this.trtcRoomId = process.env.TENCENT_ROOM_ID ? Number(process.env.TENCENT_ROOM_ID) : (Math.floor(Math.random()*90000)+10000);
-        this.trtcUserId = process.env.TENCENT_USER_ID || `web-${Math.random().toString(36).slice(2,8)}`;
-        this.trtcAgentId = process.env.TENCENT_AGENT_ID || "robot_id";
-      }
-    } catch {}
-  }
+  // TRTC config removed
 
   
   private addLiveLine(text: string, role: 'user'|'ai') {
@@ -2131,10 +1776,6 @@ export class GdmLiveAudio extends LitElement {
     // Otherwise show the main app.
     return html`
       ${this.renderApp()}
-      <button class="health-link" @click=${this.openTrtcHealth}>
-        🛠 TRTC Health
-      </button>
-      ${this.renderTrtcHealth()}
     `;
   }
 }
