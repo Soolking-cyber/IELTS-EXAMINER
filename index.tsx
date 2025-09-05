@@ -107,6 +107,7 @@ export class GdmLiveAudio extends LitElement {
   private chunkQueue: Blob[] = [];
   private chunkSending = false;
   private transcriptStartIdx = 0;
+  private dg: WebSocket | null = null;
   private async loadScript(src: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
@@ -1255,26 +1256,71 @@ export class GdmLiveAudio extends LitElement {
         await preparePiper();
       }
     } catch {} finally { this.ttsDownloading = false; }
-    // Start mic capture + MediaRecorder and send chunks to /api/stt
+    // Start Deepgram Realtime WS (stream PCM) to avoid REST codec issues
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 }, video: false });
-      this.mediaStream = stream;
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      this.recorder = mr;
-      this.transcriptStartIdx = this.currentTranscript.length;
-      mr.ondataavailable = (e: BlobEvent) => {
-        const b = e.data;
-        if (b && b.size > 0) {
-          this.chunkQueue.push(b);
-          this.pumpSttQueue();
+      const baseUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&punctuate=true&language=en-US&vad_turnoff=500';
+      let ws: WebSocket;
+      try {
+        const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' });
+        if (!tokenRes.ok) throw new Error(await tokenRes.text());
+        const { token } = await tokenRes.json();
+        ws = new WebSocket(baseUrl, ['token', token]);
+      } catch (tokenErr) {
+        const fallback = (process.env.DEEPGRAM_FRONTEND_TOKEN || '').trim();
+        if (!fallback) throw tokenErr;
+        ws = new WebSocket(baseUrl + `&access_token=${encodeURIComponent(fallback)}`);
+      }
+      ws.binaryType = 'arraybuffer';
+      this.dg = ws;
+
+      ws.onopen = async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 }, video: false });
+        this.mediaStream = stream;
+        const src = this.inputAudioContext.createMediaStreamSource(stream);
+        this.micSourceNode = src as any;
+        const proc = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
+        this.micProcessor = proc as any;
+        proc.onaudioprocess = (e: any) => {
+          if (!this.dg || this.dg.readyState !== WebSocket.OPEN) return;
+          const chan = e.inputBuffer.getChannelData(0) as Float32Array;
+          const ab = this.floatTo16lePCM(chan);
+          this.dg.send(ab);
+        };
+        src.connect(proc);
+        proc.connect(this.inputNode);
+        this.isRecording = true;
+        this.updateStatus('Conversation started. Speak now.');
+        this.startTimer();
+        if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
+        else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
+      };
+
+      ws.onmessage = async (ev: MessageEvent) => {
+        if (typeof (ev as any).data !== 'string') return;
+        const data = JSON.parse((ev as any).data);
+        const alts = data.channel?.alternatives || data.alternatives || [];
+        const alt = Array.isArray(alts) && alts[0] ? alts[0] : null;
+        const text = (alt?.transcript || alt?.punctuated?.transcript || '').trim();
+        const isFinal = !!(data.is_final || data.speech_final || data.type === 'FinalTranscript');
+        if (!text) return;
+        if (isFinal) {
+          this.currentTranscript = [...this.currentTranscript, { speaker: 'user', text }];
+          try {
+            const prompt = `You are an IELTS Speaking examiner. Respond briefly (1-2 sentences) to keep the interview going.`;
+            const r = await fetch('/api/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [ { role: 'system', content: prompt }, { role: 'user', content: `Candidate: ${text}` } ] }) });
+            if (r.ok) {
+              const { text: reply } = await r.json();
+              if (reply) {
+                this.currentTranscript = [...this.currentTranscript, { speaker: 'examiner', text: reply }];
+                try { await this.playWithPiperAndTrack(reply); } catch {}
+              }
+            }
+          } catch {}
         }
       };
-      mr.start(2000);
-      this.isRecording = true;
-      this.updateStatus('Conversation started. Speak now.');
-      this.startTimer();
-      if (this.selectedPart === 'part1') { try { await this.speakPart1(); } catch {} }
-      else if (this.selectedPart === 'part3') { try { await this.speakPart3(); } catch {} }
+
+      ws.onclose = () => { this.cleanupWs(); };
+      ws.onerror = (e: any) => { console.warn('Deepgram WS error', e); this.updateError('Deepgram WS error'); };
     } catch (e) {
       console.error('Failed to start WS conversation', e);
       const hint = (e as any)?.message || String(e);
@@ -1287,9 +1333,11 @@ export class GdmLiveAudio extends LitElement {
     // stop any ongoing TTS immediately
     this.cancelSpeaking();
     try { this.mediaStream && this.mediaStream.getTracks()?.forEach(t => t.stop()); } catch {}
+    try { this.dg && this.dg.close(); } catch {}
     this.recorder = null;
     this.micProcessor = null as any;
     this.micSourceNode = null as any;
+    this.dg = null;
     this.isRecording = false;
     this.stopTimer();
     this.updateStatus('Conversation stopped.');
