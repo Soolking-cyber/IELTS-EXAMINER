@@ -1289,7 +1289,20 @@ export class GdmLiveAudio extends LitElement {
         const grant = await fetch('/api/deepgram/token');
         if (grant.ok) {
           const json = await grant.json().catch(() => ({}));
-          accessToken = json?.access_token || json?.token || undefined;
+          accessToken = (json?.access_token || json?.token || '').trim() || undefined;
+        } else {
+          // Try SITE_URL as absolute fallback (helps in Vite-only local dev)
+          const base = (process as any)?.env?.SITE_URL as string | undefined;
+          if (base) {
+            const abs = base.replace(/\/$/, '') + '/api/deepgram/token';
+            try {
+              const grant2 = await fetch(abs);
+              if (grant2.ok) {
+                const json2 = await grant2.json().catch(() => ({}));
+                accessToken = (json2?.access_token || json2?.token || '').trim() || undefined;
+              }
+            } catch {}
+          }
         }
       } catch {}
       // 1b) fallback for local Vite dev without serverless APIs
