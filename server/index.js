@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { WebSocketServer } from 'ws';
+import http from 'http';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -89,8 +90,22 @@ function pcm16leToFloat32(int16) {
   return out;
 }
 
-const wss = new WebSocketServer({ port: PORT });
-console.log(`[server] WS listening on ws://localhost:${PORT}`);
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+    res.end(JSON.stringify({ ok: true, vosk: !!voskAvailable, llm: !!openai }));
+  } else if (req.url === '/version') {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ielts-audio-server 0.1.0');
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+const wss = new WebSocketServer({ server });
+server.listen(PORT, () => {
+  console.log(`[server] WS listening on ws://0.0.0.0:${PORT}`);
+});
 
 wss.on('connection', (ws) => {
   console.log('[server] client connected');
